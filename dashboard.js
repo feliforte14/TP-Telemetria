@@ -71,6 +71,9 @@ function nombreDeMotor(motor, total) {
   return (porDefecto && porDefecto[id]) || ('Motor ' + id);
 }
 
+/** Descripción de cada pata del cuadrúpedo, tal como la define el enunciado. */
+const DESCRIPCION_PATAS = Object.freeze({ FR: 'delantera derecha', FL: 'delantera izquierda', RR: 'trasera derecha', RL: 'trasera izquierda' });
+
 /** Porcentaje de batería acotado a 0-100 (o 0 si no es un número). */
 function limitarPorcentaje(soc) {
   return (typeof soc === 'number' && Number.isFinite(soc)) ? Math.max(0, Math.min(100, soc)) : 0;
@@ -573,6 +576,76 @@ const PanelCeldas = {
   },
 };
 
+/* ---------- Panel de fuerzas por pata ---------- */
+const PanelPatas = {
+  nombres: [],
+  nodos: {},
+  construir(patas) {
+    this.nombres = patas;
+    this.nodos = {};
+    const cont = $('patas');
+    cont.replaceChildren();
+    const cuadrupedo = ['FR', 'FL', 'RR', 'RL'].every((p) => patas.includes(p));
+    if (!patas.length) {
+      cont.appendChild(crear('p', 'vacio', 'Este modelo de robot no reporta fuerzas de pata.'));
+      $('patasResumen').textContent = '';
+      $('patasDescr').textContent = '';
+      return;
+    }
+    if (cuadrupedo) {
+      const NS = 'http://www.w3.org/2000/svg';
+      const svg = document.createElementNS(NS, 'svg');
+      svg.setAttribute('viewBox', '0 0 220 280');
+      svg.setAttribute('role', 'img');
+      svg.setAttribute('aria-label', 'Robot visto desde arriba con las cuatro patas');
+      const cuerpo = document.createElementNS(NS, 'rect');
+      cuerpo.setAttribute('class', 'cuerpo');
+      cuerpo.setAttribute('x', '70'); cuerpo.setAttribute('y', '40');
+      cuerpo.setAttribute('width', '80'); cuerpo.setAttribute('height', '200'); cuerpo.setAttribute('rx', '22');
+      svg.appendChild(cuerpo);
+      const frente = document.createElementNS(NS, 'text');
+      frente.setAttribute('class', 'frente'); frente.setAttribute('x', '110'); frente.setAttribute('y', '20');
+      frente.textContent = '▲ frente';
+      svg.appendChild(frente);
+      const pos = { FL: [38, 70], FR: [182, 70], RL: [38, 210], RR: [182, 210] };
+      for (const p of ['FL', 'FR', 'RL', 'RR']) {
+        const g = document.createElementNS(NS, 'g');
+        const c = document.createElementNS(NS, 'circle');
+        c.setAttribute('class', 'pata-circulo');
+        c.setAttribute('cx', pos[p][0]); c.setAttribute('cy', pos[p][1]); c.setAttribute('r', '28');
+        const t = document.createElementNS(NS, 'text');
+        t.setAttribute('class', 'pata-txt');
+        t.setAttribute('x', pos[p][0]); t.setAttribute('y', pos[p][1] + 5);
+        t.textContent = p;
+        g.appendChild(c); g.appendChild(t); svg.appendChild(g);
+        this.nodos[p] = c;
+      }
+      cont.appendChild(svg);
+      $('patasDescr').textContent = patas.map((p) => p + ' ' + DESCRIPCION_PATAS[p]).join(' · ');
+    } else {
+      $('patasDescr').textContent = '';
+      const lista = crear('div', 'patas-lista');
+      for (const p of patas) {
+        const item = crear('span', 'item', p);
+        lista.appendChild(item);
+        this.nodos[p] = item;
+      }
+      cont.appendChild(lista);
+    }
+  },
+  actualizar(fuerzas) {
+    let apoyadas = 0;
+    for (const p of this.nombres) {
+      const nodo = this.nodos[p];
+      if (!nodo) continue;
+      const apoya = Number(fuerzas[p]) === 1;
+      nodo.classList.toggle('apoyada', apoya);
+      if (apoya) apoyadas++;
+    }
+    if (this.nombres.length) $('patasResumen').textContent = apoyadas + ' de ' + this.nombres.length + ' apoyadas';
+  },
+};
+
 /* ---------- Historial de temperatura por motor ---------- */
 const PanelTemp = {
   chart: null,
@@ -680,6 +753,7 @@ function iniciarApp() {
     cantMotores = data.motores.length;
     PanelMotores.construir(data.motores);
     PanelTemp.construir(data.motores);
+    PanelPatas.construir(Object.keys(data.fuerzas || {}));
     $('nombreRobot').textContent = 'Unitree ' + String(data.modelo || '').toUpperCase() + ' · ' + cantMotores + ' motores';
     fetch(telemetria.base + '/info', { cache: 'no-store' })
       .then((r) => (r.ok ? r.json() : null))
@@ -706,6 +780,7 @@ function iniciarApp() {
     PanelIMU.actualizar(data.imu, data.ts);
     PanelBMS.actualizar(data.bms);
     PanelCeldas.actualizar(data.bms.celdas, data.ts);
+    PanelPatas.actualizar(data.fuerzas);
     PanelTemp.actualizar(data.motores, data.ts);
 
   });
