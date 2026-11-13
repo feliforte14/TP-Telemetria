@@ -138,6 +138,21 @@
       <p class="leyenda centrada"><span class="sem ok">apoyada</span> <span class="sem aire">en el aire</span></p>
     </section>
 
+    <!-- ============ Estadísticas de la conexión ============ -->
+    <section class="panel panel-stats" id="panelStats" aria-labelledby="tStats">
+      <div class="panel-cab"><h2 id="tStats">Conexión</h2></div>
+      <p class="desc">Estado del enlace con el servidor: fuente de datos en uso, mensajes por segundo, tráfico, latencia del pedido (solo con polling) y hace cuánto llegó el último dato.</p>
+      <dl class="datos stats">
+        <div><dt>Fuente activa</dt><dd id="statFuente">—</dd></div>
+        <div><dt>Mensajes por segundo</dt><dd id="statMsgs">—</dd></div>
+        <div><dt>Intervalo medio</dt><dd id="statIntervalo">—</dd></div>
+        <div><dt>Tráfico recibido</dt><dd id="statKb">—</dd></div>
+        <div><dt>Latencia del pedido</dt><dd id="statRtt">—</dd></div>
+        <div><dt>Último dato</dt><dd id="statUltimo">—</dd></div>
+        <div><dt>Mensajes descartados</dt><dd id="statInvalidos">0</dd></div>
+      </dl>
+    </section>
+
   </main>
 
   <div id="toasts" class="toasts" aria-live="polite"></div>
@@ -146,5 +161,6 @@
     TP05 · Desarrollo de Aplicaciones II · UADE. Solo lectura: este dashboard no envía ningún comando al robot.
   </footer>
 
+  <script src="dashboard.js"></script>
 </body>
 </html>

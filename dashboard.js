@@ -1,0 +1,431 @@
+'use strict';
+
+/* ============================================================================
+ * Dashboard web de telemetría — TP05 Desarrollo de Aplicaciones II (UADE)
+ *
+ * Versión web del monitor de motores Unitree (electroSim). Consume el backend
+ * FastAPI de la cátedra: GET /telemetria (polling) y WS /ws (tiempo real).
+ *
+ * Organización del archivo (cada parte solo depende de las anteriores):
+ *   1. Configuración y lógica pura (semáforo, buffer circular, CSV, validación).
+ *   2. Telemetria: acceso a datos. WebSocket + polling, reconexión, estadísticas.
+ *      Es un Observer: la interfaz se suscribe y no sabe de dónde llegan los datos.
+ *   3. Paneles: un objeto por panel (Motores, IMU, BMS, Patas, TempHistorial).
+ *   4. Captura y exportación CSV.
+ *   5. Aplicación: conecta todo y maneja la pantalla.
+ *
+ * Las funciones puras se exportan con module.exports para poder probarlas con Node.
+ * ========================================================================== */
+
+/* ============================================================================
+ * 1. CONFIGURACIÓN Y LÓGICA PURA
+ * ========================================================================== */
+
+const CONFIG = Object.freeze({
+  API_POR_DEFECTO: 'http://localhost:8001',
+  POLL_MS: 250,                 // la consigna pide como máximo 500 ms
+  TIMEOUT_MS: 2000,             // tiempo máximo de espera de cada pedido HTTP
+  HIST_SIZE: 300,               // buffer circular (30 s a 10 Hz, como electroSim)
+  MIN_GRAFICO: 60,              // la consigna pide al menos 60 muestras en el gráfico
+  UMBRAL_VERDE: 40,             // < 40 °C verde
+  UMBRAL_ROJO: 60,              // 40 a 60 °C amarillo, > 60 °C rojo
+  HISTERESIS_ALERTA: 2,         // una alerta se rearma al bajar 2 °C del umbral
+  SIN_DATOS_MS: 2000,           // sin mensajes por este tiempo = conexión caída
+  WS_REINTENTO_INICIAL_MS: 1000,
+  WS_REINTENTO_MAX_MS: 10000,
+  FALLOS_PARA_CAIDA: 3,         // pedidos HTTP seguidos que fallan antes de avisar
+  MAX_MUESTRAS: 5000,           // tope de capturas en memoria
+  VENTANA_STATS_MS: 5000,       // ventana para mensajes por segundo y tráfico
+});
+
+/** Formatea un número para mostrarlo; '—' si no es un número válido. */
+function fmt(n, decimales = 1) {
+  return (typeof n === 'number' && Number.isFinite(n)) ? n.toFixed(decimales) : '—';
+}
+
+/** Revisa que un mensaje tenga la forma del contrato (API.md). */
+function validarTelemetria(d) {
+  return !!d && typeof d === 'object'
+    && Array.isArray(d.motores)
+    && !!d.imu && typeof d.imu === 'object'
+    && !!d.bms && typeof d.bms === 'object'
+    && !!d.fuerzas && typeof d.fuerzas === 'object';
+}
+
+/** Acepta "192.168.0.5:8001" o "http://host:8001/" y devuelve "http://host:8001". */
+function normalizarBase(texto) {
+  let t = String(texto || '').trim();
+  if (!t) throw new Error('Escribí la dirección del servidor.');
+  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(t)) t = 'http://' + t;
+  let url;
+  try { url = new URL(t); } catch { throw new Error('La dirección no es válida.'); }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw new Error('Solo se admiten direcciones http:// o https://.');
+  }
+  return url.origin;
+}
+
+/** http://host:8001 -> ws://host:8001/ws */
+function wsUrl(base) {
+  return base.replace(/^http/i, 'ws') + '/ws';
+}
+
+/* ============================================================================
+ * 2. TELEMETRIA — acceso a datos (patrón Observer)
+ *
+ * Quien quiera datos se suscribe con en('dato', fn) y en('estado', fn).
+ * Modos: 'auto'    WebSocket; si falla, polling mientras reintenta el WebSocket.
+ *        'ws'      solo WebSocket (reconecta con espera creciente).
+ *        'polling' solo GET /telemetria cada POLL_MS.
+ * Estados: 'conectando' | 'ws' | 'polling' | 'caido'.
+ * ========================================================================== */
+
+class Telemetria {
+  constructor() {
+    this.oyentes = { dato: [], estado: [] };
+    this.base = null;
+    this.modo = 'auto';
+    this.estado = 'conectando';
+    this.detalle = '';
+    this.intentos = 0;
+    this.ultimoDato = null;
+    this.ultimoDatoEn = 0;
+    this.invalidos = 0;
+    this.rttMs = null;
+    this._llegadas = [];
+    this._gen = 0;            // se incrementa en cada iniciar(); descarta callbacks viejos
+    this._ws = null;
+    this._wsAbierto = false;
+    this._wsReintentoMs = CONFIG.WS_REINTENTO_INICIAL_MS;
+    this._wsTimer = null;
+    this._pollActivo = false;
+    this._pollTimer = null;
+    this._fallosPoll = 0;
+    this._vigilante = null;
+  }
+
+  en(evento, fn) { this.oyentes[evento].push(fn); }
+
+  _emitir(evento, arg) {
+    for (const fn of this.oyentes[evento]) {
+      try { fn(arg); } catch (e) { console.error('Error en un suscriptor de ' + evento, e); }
+    }
+  }
+
+  _setEstado(estado, detalle = '') {
+    if (estado === this.estado && detalle === this.detalle) return;
+    this.estado = estado;
+    this.detalle = detalle;
+    this._emitir('estado', { estado, detalle, intentos: this.intentos });
+  }
+
+  iniciar(base, modo = 'auto') {
+    this.detener();
+    this.base = base;
+    this.modo = modo;
+    this.intentos = 0;
+    this.ultimoDato = null;
+    this.ultimoDatoEn = 0;
+    this.rttMs = null;
+    this._llegadas = [];
+    this._wsReintentoMs = CONFIG.WS_REINTENTO_INICIAL_MS;
+    this._fallosPoll = 0;
+    const gen = this._gen;
+    this._setEstado('conectando', 'Conectando con ' + base);
+    if (modo === 'polling') this._iniciarPolling(gen); else this._abrirWS(gen);
+    this._vigilante = setInterval(() => this._vigilar(gen), 1000);
+  }
+
+  detener() {
+    this._gen++;
+    clearTimeout(this._wsTimer);
+    clearTimeout(this._pollTimer);
+    clearInterval(this._vigilante);
+    this._pollActivo = false;
+    this._wsAbierto = false;
+    if (this._ws) {
+      this._ws.onopen = this._ws.onmessage = this._ws.onerror = this._ws.onclose = null;
+      try { this._ws.close(); } catch { /* ya estaba cerrado */ }
+      this._ws = null;
+    }
+  }
+
+  /** Se llama cuando llega un mensaje bueno, venga de donde venga. */
+  _recibir(texto, rtt) {
+    let d;
+    try { d = JSON.parse(texto); } catch { this.invalidos++; return; }
+    if (!validarTelemetria(d)) { this.invalidos++; return; }
+    const ahora = Date.now();
+    this.ultimoDato = d;
+    this.ultimoDatoEn = ahora;
+    if (rtt !== null && rtt !== undefined) this.rttMs = rtt;
+    this._llegadas.push({ t: ahora, bytes: texto.length });
+    const limite = ahora - CONFIG.VENTANA_STATS_MS;
+    while (this._llegadas.length && this._llegadas[0].t < limite) this._llegadas.shift();
+    this._emitir('dato', d);
+  }
+
+  /** Mensajes por segundo, intervalo medio y tráfico en la ventana reciente. */
+  estadisticas() {
+    const n = this._llegadas.length;
+    if (n < 2) return { msgsPorSeg: 0, intervaloMs: null, kbPorSeg: 0, rttMs: this.rttMs };
+    const span = (this._llegadas[n - 1].t - this._llegadas[0].t) / 1000;
+    const bytes = this._llegadas.slice(1).reduce((a, x) => a + x.bytes, 0);
+    return {
+      msgsPorSeg: span > 0 ? (n - 1) / span : 0,
+      intervaloMs: span > 0 ? (span * 1000) / (n - 1) : null,
+      kbPorSeg: span > 0 ? bytes / 1024 / span : 0,
+      rttMs: this.rttMs,
+    };
+  }
+
+  /** Cada segundo: si el flujo se cortó sin que el navegador lo avise, lo detecta. */
+  _vigilar(gen) {
+    if (gen !== this._gen) return;
+    if (!this.ultimoDatoEn) return;
+    const edad = Date.now() - this.ultimoDatoEn;
+    if (edad > CONFIG.SIN_DATOS_MS && (this.estado === 'ws' || this.estado === 'polling')) {
+      this._setEstado('caido', 'No llegan datos hace ' + Math.round(edad / 1000) + ' s');
+      if (this._ws) { try { this._ws.close(); } catch { /* sigue */ } }
+    }
+  }
+
+  /* ---------- WebSocket ---------- */
+
+  _abrirWS(gen) {
+    if (gen !== this._gen) return;
+    let ws;
+    try {
+      ws = new WebSocket(wsUrl(this.base));
+    } catch (e) {
+      this._wsFallo(gen, 'Dirección de WebSocket inválida');
+      return;
+    }
+    this._ws = ws;
+    ws.onopen = () => {
+      if (gen !== this._gen) return;
+      this._wsAbierto = true;
+      this._wsReintentoMs = CONFIG.WS_REINTENTO_INICIAL_MS;
+      this.intentos = 0;
+      this._detenerPolling();          // si estaba el respaldo por polling, ya no hace falta
+      this._setEstado('ws', 'WebSocket');
+    };
+    ws.onmessage = (ev) => {
+      if (gen !== this._gen) return;
+      if (typeof ev.data !== 'string') return;
+      this._recibir(ev.data, null);
+      if (this.estado !== 'ws') this._setEstado('ws', 'WebSocket');
+    };
+    ws.onerror = () => { /* siempre viene seguido de onclose */ };
+    ws.onclose = () => {
+      if (gen !== this._gen) return;
+      this._ws = null;
+      this._wsAbierto = false;
+      this._wsFallo(gen, 'Se cerró el WebSocket');
+    };
+  }
+
+  _wsFallo(gen, motivo) {
+    if (gen !== this._gen) return;
+    this.intentos++;
+    if (this.modo === 'auto') {
+      this._iniciarPolling(gen);        // respaldo: seguir recibiendo datos mientras se reintenta
+      if (this.estado !== 'polling') this._setEstado('conectando', motivo + '. Probando con polling…');
+    } else {
+      this._setEstado('caido', motivo + '. Reintentando en ' + Math.round(this._wsReintentoMs / 1000) + ' s…');
+    }
+    clearTimeout(this._wsTimer);
+    this._wsTimer = setTimeout(() => this._abrirWS(gen), this._wsReintentoMs);
+    this._wsReintentoMs = Math.min(this._wsReintentoMs * 2, CONFIG.WS_REINTENTO_MAX_MS);
+  }
+
+  /* ---------- Polling ---------- */
+
+  _iniciarPolling(gen) {
+    if (this._pollActivo || gen !== this._gen) return;
+    this._pollActivo = true;
+    this._fallosPoll = 0;
+    this._cicloPolling(gen);
+  }
+
+  _detenerPolling() {
+    this._pollActivo = false;
+    clearTimeout(this._pollTimer);
+  }
+
+  /** Un pedido por vez: el siguiente se agenda recién cuando termina el anterior. */
+  async _cicloPolling(gen) {
+    if (!this._pollActivo || gen !== this._gen) return;
+    const inicio = performance.now();
+    const ctrl = new AbortController();
+    const corte = setTimeout(() => ctrl.abort(), CONFIG.TIMEOUT_MS);
+    try {
+      const resp = await fetch(this.base + '/telemetria', { signal: ctrl.signal, cache: 'no-store' });
+      if (!resp.ok) throw new Error('El servidor respondió HTTP ' + resp.status);
+      const texto = await resp.text();
+      if (gen !== this._gen || !this._pollActivo) return;
+      this._fallosPoll = 0;
+      this._recibir(texto, performance.now() - inicio);
+      if (!this._wsAbierto) this._setEstado('polling', 'Polling cada ' + CONFIG.POLL_MS + ' ms');
+    } catch (e) {
+      if (gen !== this._gen || !this._pollActivo) return;
+      this._fallosPoll++;
+      if (this._fallosPoll >= CONFIG.FALLOS_PARA_CAIDA) {
+        const motivo = !e ? 'error de red'
+          : e.name === 'AbortError' ? 'el servidor no responde'
+          : e.name === 'TypeError' ? 'no se pudo contactar al servidor'
+          : e.message || 'error de red';
+        this._setEstado('caido', 'Falló la conexión (' + motivo + '). Reintentando…');
+      }
+    } finally {
+      clearTimeout(corte);
+    }
+    if (!this._pollActivo || gen !== this._gen) return;
+    const gastado = performance.now() - inicio;
+    const espera = this._fallosPoll > 0 ? 1000 : Math.max(0, CONFIG.POLL_MS - gastado);
+    this._pollTimer = setTimeout(() => this._cicloPolling(gen), espera);
+  }
+}
+
+/* Exportación para las pruebas con Node (en el navegador no existe `module`). */
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = {
+    CONFIG, fmt, validarTelemetria, normalizarBase, wsUrl, Telemetria,
+  };
+}
+
+/* ============================================================================
+ * 3. PANELES
+ * Cada panel tiene construir() (cuando se conoce el modelo de robot) y
+ * actualizar(datos). Todo el texto se escribe con textContent: ningún dato del
+ * servidor se interpreta como HTML.
+ * ========================================================================== */
+
+const $ = (id) => document.getElementById(id);
+
+function crear(tag, clase, texto) {
+  const el = document.createElement(tag);
+  if (clase) el.className = clase;
+  if (texto !== undefined) el.textContent = texto;
+  return el;
+}
+
+/* ============================================================================
+ * 5. APLICACIÓN
+ * ========================================================================== */
+
+function iniciarApp() {
+  const telemetria = new Telemetria();
+  let modeloActual = null;
+  let cantMotores = 0;
+  let ultimo = null;                 // último mensaje recibido (ya con el ajuste de prueba, si hay)
+  const params = new URLSearchParams(location.search);
+  const forzarTemp = Number(params.get('forzarTemp')) || 0;   // solo para probar el semáforo
+
+  /* ---------- avisos en pantalla ---------- */
+  function toast(texto, tipo = '') {
+    const t = crear('div', 'toast ' + tipo, texto);
+    $('toasts').appendChild(t);
+    setTimeout(() => t.remove(), 5000);
+  }
+
+  function leerAlmacenado(clave) {
+    try { return localStorage.getItem(clave); } catch { return null; }
+  }
+  function guardarAlmacenado(clave, valor) {
+    try { localStorage.setItem(clave, valor); } catch { /* modo privado: no pasa nada */ }
+  }
+
+  /* ---------- estado de la conexión ---------- */
+  const TEXTOS_ESTADO = { ws: 'En vivo · WebSocket', polling: 'En vivo · polling', conectando: 'Conectando…', caido: 'Sin conexión' };
+  function mostrarEstado({ estado, detalle, intentos }) {
+    document.body.dataset.conexion = (estado === 'ws' || estado === 'polling') ? 'ok' : estado;
+    $('pillTexto').textContent = TEXTOS_ESTADO[estado] || estado;
+    const banner = $('banner');
+    banner.hidden = estado !== 'caido';
+    if (estado === 'caido') {
+      $('bannerTexto').textContent = ' ' + detalle + (intentos ? ' (intento ' + intentos + ')' : '') + ' Se muestran los últimos valores recibidos.';
+    }
+    $('statFuente').textContent = estado === 'ws' ? 'WebSocket (push)' : estado === 'polling' ? 'Polling HTTP cada ' + CONFIG.POLL_MS + ' ms' : TEXTOS_ESTADO[estado];
+  }
+
+  /* ---------- modelo de robot ---------- */
+  function prepararModelo(data) {
+    modeloActual = data.modelo;
+    cantMotores = data.motores.length;
+    $('nombreRobot').textContent = 'Unitree ' + String(data.modelo || '').toUpperCase() + ' · ' + cantMotores + ' motores';
+    fetch(telemetria.base + '/info', { cache: 'no-store' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((info) => {
+        if (info && info.nombre && modeloActual === data.modelo) {
+          $('nombreRobot').textContent = info.nombre + ' · ' + info.n_motores + ' motores · modo ' + (info.modo || '?');
+        }
+      })
+      .catch(() => { /* el nombre ya está puesto con los datos del mensaje */ });
+  }
+
+  function aplicarAjusteDePrueba(data) {
+    if (!forzarTemp) return data;
+    return { ...data, motores: data.motores.map((m) => ({ ...m, temperatura: typeof m.temperatura === 'number' ? m.temperatura + forzarTemp : m.temperatura })) };
+  }
+
+  /* ---------- llegada de datos ---------- */
+  telemetria.en('estado', mostrarEstado);
+  telemetria.en('dato', (crudo) => {
+    const data = aplicarAjusteDePrueba(crudo);
+    if (data.modelo !== modeloActual || data.motores.length !== cantMotores) prepararModelo(data);
+    ultimo = data;
+
+  });
+
+  /* ---------- conexión: servidor y fuente ---------- */
+  let baseActual = null;
+  function conectar(base, modo) {
+    baseActual = base;
+    modeloActual = null;
+    $('inpApi').value = base;
+    guardarAlmacenado('tp05.api', base);
+    guardarAlmacenado('tp05.fuente', modo);
+    telemetria.iniciar(base, modo);
+  }
+  $('formApi').addEventListener('submit', (e) => {
+    e.preventDefault();
+    try { conectar(normalizarBase($('inpApi').value), $('selFuente').value); }
+    catch (err) { toast(err.message, 'aviso'); }
+  });
+  $('selFuente').addEventListener('change', () => {
+    if (baseActual) conectar(baseActual, $('selFuente').value);
+  });
+
+  /* ---------- estadísticas y "datos desactualizados" ---------- */
+  setInterval(() => {
+    const s = telemetria.estadisticas();
+    $('statMsgs').textContent = s.msgsPorSeg ? fmt(s.msgsPorSeg, 1) + ' /s' : '—';
+    $('statIntervalo').textContent = s.intervaloMs ? Math.round(s.intervaloMs) + ' ms' : '—';
+    $('statKb').textContent = s.kbPorSeg ? fmt(s.kbPorSeg, 1) + ' KB/s' : '—';
+    $('statRtt').textContent = s.rttMs !== null && s.rttMs !== undefined ? Math.round(s.rttMs) + ' ms' : (telemetria.estado === 'ws' ? 'no aplica (push)' : '—');
+    $('statInvalidos').textContent = telemetria.invalidos;
+    const edad = telemetria.ultimoDatoEn ? (Date.now() - telemetria.ultimoDatoEn) : null;
+    $('statUltimo').textContent = edad === null ? 'todavía no llegó nada' : (edad < 1500 ? 'hace menos de 2 s' : 'hace ' + Math.round(edad / 1000) + ' s');
+    document.body.classList.toggle('desactualizado', edad !== null && edad > CONFIG.SIN_DATOS_MS);
+  }, 500);
+
+  /* ---------- arranque ---------- */
+  if (forzarTemp) {
+    const av = $('avisoPrueba');
+    av.hidden = false;
+    av.textContent = 'Modo de prueba: temperaturas simuladas con ' + (forzarTemp > 0 ? '+' : '') + forzarTemp + ' °C sobre el valor del servidor (parámetro forzarTemp), solo para verificar el semáforo.';
+  }
+  let base;
+  try { base = normalizarBase(params.get('api') || leerAlmacenado('tp05.api') || CONFIG.API_POR_DEFECTO); }
+  catch { base = CONFIG.API_POR_DEFECTO; }
+  const fuenteGuardada = params.get('fuente') || leerAlmacenado('tp05.fuente');
+  const fuente = ['auto', 'ws', 'polling'].includes(fuenteGuardada) ? fuenteGuardada : 'auto';
+  $('selFuente').value = fuente;
+  conectar(base, fuente);
+}
+
+if (typeof document !== 'undefined') {
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', iniciarApp);
+  else iniciarApp();
+}
