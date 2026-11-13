@@ -1,0 +1,14 @@
+# macOS
+.DS_Store
+
+# Node
+node_modules/
+npm-debug.log*
+
+# Python (por si se levanta el servidor de la cátedra desde esta carpeta)
+__pycache__/
+*.pyc
+.venv/
+
+# Logs y temporales
+*.log
