@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="es" data-tema="oscuro">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dashboard de telemetría · Unitree · TP05</title>
+  <link rel="stylesheet" href="dashboard.css">
+  <!-- Chart.js por CDN, versión fija. Si no hay internet, los gráficos se desactivan pero el resto funciona. -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+</head>
+<body data-conexion="conectando">
+
+  <!-- Íconos (sprite SVG, se usan con <use>) -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+    <defs>
+      <symbol id="i-robot" viewBox="0 0 24 24"><rect x="5" y="8" width="14" height="10" rx="3"/><path d="M12 8V5M9 13h.01M15 13h.01M3 12v3M21 12v3"/><circle cx="12" cy="4" r="1"/></symbol>
+      <symbol id="i-motor" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/></symbol>
+      <symbol id="i-imu" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 6l2.2 6H9.8L12 6z"/><path d="M12 18l-2.2-6h4.4L12 18z" opacity=".5"/></symbol>
+      <symbol id="i-bateria" viewBox="0 0 24 24"><rect x="2.5" y="7" width="16" height="10" rx="2"/><path d="M21 10.5v3M6 10v4M10 10v4"/></symbol>
+      <symbol id="i-pata" viewBox="0 0 24 24"><circle cx="6" cy="10" r="1.7"/><circle cx="10" cy="6" r="1.7"/><circle cx="14" cy="6" r="1.7"/><circle cx="18" cy="10" r="1.7"/><path d="M8 17c0-3 2-5 4-5s4 2 4 5c0 2-1.5 3-4 3s-4-1-4-3z"/></symbol>
+      <symbol id="i-grafico" viewBox="0 0 24 24"><path d="M3 20h18M4 15l4-5 4 3 5-8 3 4"/></symbol>
+      <symbol id="i-captura" viewBox="0 0 24 24"><path d="M12 3v11M7.5 10l4.5 4.5L16.5 10M4 17v3h16v-3"/></symbol>
+      <symbol id="i-red" viewBox="0 0 24 24"><path d="M2.5 9a15 15 0 0119 0M5.5 12.5a10.5 10.5 0 0113 0M8.7 16a6 6 0 016.6 0"/><circle cx="12" cy="19.2" r="1"/></symbol>
+      <symbol id="i-temp" viewBox="0 0 24 24"><path d="M10 14.8V5a2 2 0 114 0v9.8a4 4 0 11-4 0z"/></symbol>
+      <symbol id="i-alerta" viewBox="0 0 24 24"><path d="M12 3l10 17H2L12 3z"/><path d="M12 10v4M12 17h.01"/></symbol>
+      <symbol id="i-pantalla" viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></symbol>
+      <symbol id="i-tema" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M19.1 4.9l-1.4 1.4M6.3 17.7l-1.4 1.4"/></symbol>
+    </defs>
+  </svg>
+
+  <header class="barra">
+    <div class="marca">
+      <svg class="ico grande" aria-hidden="true"><use href="#i-robot"/></svg>
+      <div>
+        <h1>Dashboard de telemetría</h1>
+        <p id="nombreRobot" class="sub">Unitree · esperando datos…</p>
+      </div>
+    </div>
+
+    <div class="controles">
+      <div id="pillConexion" class="pill" role="status" aria-live="polite">
+        <span class="punto" aria-hidden="true"></span>
+        <span id="pillTexto">Conectando…</span>
+      </div>
+
+      <label class="campo">
+        <span>Fuente de datos</span>
+        <select id="selFuente">
+          <option value="auto">Automática (WebSocket, con respaldo por polling)</option>
+          <option value="ws">Solo WebSocket</option>
+          <option value="polling">Solo polling (HTTP)</option>
+        </select>
+      </label>
+
+      <label class="campo">
+        <span>Robot</span>
+        <select id="selModelo">
+          <option value="">El del servidor</option>
+          <option value="go2">Go2 (12 motores)</option>
+          <option value="g1">G1 (29 motores)</option>
+        </select>
+      </label>
+
+      <form id="formApi" class="campo campo-api" autocomplete="off">
+        <span>Servidor</span>
+        <span class="fila">
+          <input id="inpApi" type="text" inputmode="url" spellcheck="false" aria-label="Dirección del servidor de telemetría">
+          <button type="submit" class="btn">Conectar</button>
+        </span>
+      </form>
+
+      <div class="iconos-barra">
+        <button type="button" class="btn icono" id="btnTema" title="Cambiar entre tema oscuro y claro" aria-label="Cambiar tema">
+          <svg class="ico" aria-hidden="true"><use href="#i-tema"/></svg>
+        </button>
+        <button type="button" class="btn icono" id="btnPantalla" title="Pantalla completa" aria-label="Pantalla completa">
+          <svg class="ico" aria-hidden="true"><use href="#i-pantalla"/></svg>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <div id="banner" class="banner" role="alert" hidden>
+    <svg class="ico" aria-hidden="true"><use href="#i-alerta"/></svg>
+    <span><strong>Sin conexión con el servidor.</strong> <span id="bannerTexto"></span></span>
+  </div>
+
+  <div id="avisoPrueba" class="aviso-prueba" hidden></div>
+
+  <!-- ============ Resumen de un vistazo ============ -->
+  <section class="kpis" aria-label="Resumen del estado del robot">
+    <article class="kpi" id="kpiTempCard" title="La mayor temperatura entre todos los motores y en cuál se da">
+      <svg class="ico" aria-hidden="true"><use href="#i-temp"/></svg>
+      <div>
+        <span class="kpi-etq">Temperatura máxima</span>
+        <span class="kpi-valor" id="kpiTemp">—</span>
+        <span class="kpi-sub" id="kpiTempSub">&nbsp;</span>
+      </div>
+    </article>
+    <article class="kpi" id="kpiRiesgoCard" title="Cuántos motores están en amarillo o en rojo, del total">
+      <svg class="ico" aria-hidden="true"><use href="#i-motor"/></svg>
+      <div>
+        <span class="kpi-etq">Motores en riesgo</span>
+        <span class="kpi-valor" id="kpiRiesgo">—</span>
+        <span class="kpi-sub" id="kpiRiesgoSub">&nbsp;</span>
+      </div>
+    </article>
+    <article class="kpi" title="Carga restante de la batería">
+      <svg class="ico" aria-hidden="true"><use href="#i-bateria"/></svg>
+      <div>
+        <span class="kpi-etq">Batería</span>
+        <span class="kpi-valor" id="kpiBat">—</span>
+        <span class="kpi-barra" aria-hidden="true"><i id="kpiBatBarra"></i></span>
+      </div>
+    </article>
+    <article class="kpi" title="Patas apoyadas en el suelo en este momento">
+      <svg class="ico" aria-hidden="true"><use href="#i-pata"/></svg>
+      <div>
+        <span class="kpi-etq">Patas apoyadas</span>
+        <span class="kpi-valor" id="kpiPatas">—</span>
+        <span class="kpi-sub" id="kpiPatasSub">&nbsp;</span>
+      </div>
+    </article>
+    <article class="kpi" title="Muestras guardadas con «Capturar muestra» en esta sesión">
+      <svg class="ico" aria-hidden="true"><use href="#i-captura"/></svg>
+      <div>
+        <span class="kpi-etq">Muestras capturadas</span>
+        <span class="kpi-valor" id="kpiMuestras">0</span>
+        <span class="kpi-sub">en esta sesión</span>
+      </div>
+    </article>
+  </section>
+
+  <main class="grilla">
+
+    <!-- ============ Panel 1: Motores ============ -->
+    <section class="panel panel-motores" id="panelMotores" aria-labelledby="tMotores">
+      <div class="panel-cab">
+        <h2 id="tMotores"><svg class="ico" aria-hidden="true"><use href="#i-motor"/></svg>Motores</h2>
+        <div class="chips" aria-label="Resumen de temperaturas">
+          <span class="chip ok"><b id="chipOk">0</b> normales</span>
+          <span class="chip warn"><b id="chipWarn">0</b> precaución</span>
+          <span class="chip hot"><b id="chipHot">0</b> sobrecalentados</span>
+          <span class="chip neutro">máx. <b id="chipMax">—</b></span>
+        </div>
+      </div>
+      <p class="desc">Estado de cada articulación: temperatura del motor, ángulo (°), velocidad angular (rad/s) y torque estimado (N·m). El semáforo marca de un vistazo qué motores se calientan.</p>
+
+      <div class="segmentado" role="group" aria-label="Vista de los motores">
+        <button type="button" id="vistaTabla" aria-pressed="true" title="Una fila por motor con todos sus valores">Tabla</button>
+        <button type="button" id="vistaMapa" aria-pressed="false" title="Un mosaico por motor, agrupado por pata o articulación, coloreado según su temperatura">Mapa de calor</button>
+      </div>
+
+      <div class="tabla-wrap" id="tablaWrap">
+        <table id="tablaMotores">
+          <thead>
+            <tr>
+              <th>Motor</th>
+              <th id="thTemp" class="ordenable" tabindex="0" aria-sort="none" title="Ordenar por temperatura">Temperatura <span class="flecha" aria-hidden="true"></span></th>
+              <th>Estado</th>
+              <th>Ángulo (°)</th>
+              <th>Velocidad (rad/s)</th>
+              <th>Torque (N·m)</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <div class="mapa" id="mapaMotores" hidden></div>
+
+      <p class="leyenda">
+        Semáforo:
+        <span class="sem ok">verde &lt; 40 °C</span>
+        <span class="sem warn">amarillo 40–60 °C</span>
+        <span class="sem hot">rojo &gt; 60 °C</span>
+      </p>
+    </section>
+
+    <!-- ============ Panel 2: IMU ============ -->
+    <section class="panel panel-imu" id="panelImu" aria-labelledby="tImu">
+      <div class="panel-cab">
+        <h2 id="tImu"><svg class="ico" aria-hidden="true"><use href="#i-imu"/></svg>IMU</h2>
+        <span id="imuBuffer" class="nota">0 / 300 muestras</span>
+      </div>
+      <p class="desc">Unidad de medición inercial: inclinación del robot en grados (roll = giro lateral, pitch = cabeceo, yaw = rumbo) y aceleración en m/s².</p>
+
+      <div class="imu-vista">
+        <div class="instrumentos" aria-hidden="true">
+          <!-- Horizonte artificial: gira con el roll y sube o baja con el pitch -->
+          <figure class="instr">
+            <svg viewBox="0 0 200 200" class="horizonte" role="img" aria-label="Horizonte artificial">
+              <defs><clipPath id="recorteHorizonte"><circle cx="100" cy="100" r="88"/></clipPath></defs>
+              <g clip-path="url(#recorteHorizonte)">
+                <g id="horizonteGrupo">
+                  <rect x="-200" y="-300" width="600" height="400" class="cielo"/>
+                  <rect x="-200" y="100" width="600" height="400" class="suelo"/>
+                  <line x1="-200" y1="100" x2="400" y2="100" class="linea-horizonte"/>
+                  <g class="escala-pitch">
+                    <line x1="80" y1="70" x2="120" y2="70"/><line x1="88" y1="85" x2="112" y2="85"/>
+                    <line x1="88" y1="115" x2="112" y2="115"/><line x1="80" y1="130" x2="120" y2="130"/>
+                  </g>
+                </g>
+              </g>
+              <circle cx="100" cy="100" r="88" class="aro"/>
+              <path d="M60 100h30M110 100h30M100 100v-8" class="avion"/>
+              <path d="M100 14l-6 10h12z" class="marca-roll"/>
+            </svg>
+            <figcaption>Horizonte: roll y pitch</figcaption>
+          </figure>
+          <!-- Brújula: la flecha gira con el yaw -->
+          <figure class="instr">
+            <svg viewBox="0 0 200 200" class="brujula" role="img" aria-label="Rumbo (yaw)">
+              <circle cx="100" cy="100" r="88" class="aro-brujula"/>
+              <text x="100" y="32" class="punto-cardinal">N</text><text x="172" y="106" class="punto-cardinal">E</text>
+              <text x="100" y="184" class="punto-cardinal">S</text><text x="28" y="106" class="punto-cardinal">O</text>
+              <g id="brujulaFlecha"><path d="M100 36l11 64H89z" class="flecha-norte"/><path d="M100 164l11-64H89z" class="flecha-sur"/></g>
+              <circle cx="100" cy="100" r="5" class="eje"/>
+            </svg>
+            <figcaption>Brújula: yaw (rumbo)</figcaption>
+          </figure>
+        </div>
+
+        <div class="angulos">
+          <div class="valor"><span class="etq">Roll</span><span class="num" id="roll">—</span></div>
+          <div class="valor"><span class="etq">Pitch</span><span class="num" id="pitch">—</span></div>
+          <div class="valor"><span class="etq">Yaw</span><span class="num" id="yaw">—</span></div>
+          <div class="acel">
+            Aceleración (m/s²)
+            <span>ax <b id="ax">—</b></span>
+            <span>ay <b id="ay">—</b></span>
+            <span>az <b id="az">—</b></span>
+          </div>
+        </div>
+      </div>
+
+      <div class="grafico"><canvas id="chartImu" aria-label="Historial de roll, pitch y yaw" role="img"></canvas></div>
+      <p class="desc-grafico">Evolución de roll, pitch y yaw (grados) en las últimas 300 muestras.</p>
+    </section>
+
+    <!-- ============ Panel 3: BMS ============ -->
+    <section class="panel panel-bms" id="panelBms" aria-labelledby="tBms">
+      <div class="panel-cab"><h2 id="tBms"><svg class="ico" aria-hidden="true"><use href="#i-bateria"/></svg>Batería (BMS)</h2></div>
+      <p class="desc">Sistema de gestión de la batería: carga restante (%), corriente (mA), temperatura (°C) y voltaje (V) de cada celda. Una diferencia grande entre celdas indica que están desbalanceadas.</p>
+      <div class="soc">
+        <span class="num" id="soc">—</span>
+        <div class="barra-soc" aria-hidden="true"><div id="socBarra"></div></div>
+      </div>
+      <dl class="datos">
+        <div><dt>Corriente</dt><dd id="bmsCorriente">—</dd></div>
+        <div><dt>Temperatura</dt><dd id="bmsTemp">—</dd></div>
+      </dl>
+      <h3>Voltaje por celda</h3>
+      <div id="celdas" class="celdas"></div>
+      <p id="celdasResumen" class="nota"></p>
+      <div id="panelCeldasHist" hidden>
+        <h3>Historial de voltajes por celda</h3>
+        <div class="grafico corto"><canvas id="chartCeldas" aria-label="Historial del voltaje de cada celda" role="img"></canvas></div>
+        <p class="desc-grafico">Voltaje de cada celda en el tiempo: permite ver si alguna se separa del resto.</p>
+      </div>
+    </section>
+
+    <!-- ============ Panel 4: Fuerzas por pata ============ -->
+    <section class="panel panel-patas" id="panelPatas" aria-labelledby="tPatas">
+      <div class="panel-cab"><h2 id="tPatas"><svg class="ico" aria-hidden="true"><use href="#i-pata"/></svg>Fuerzas por pata</h2><span id="patasResumen" class="nota"></span></div>
+      <p class="desc">Contacto de cada pata con el suelo, según la fuerza que reporta el robot. Permite seguir la marcha: cuántas patas apoyan y cuáles.</p>
+      <div id="patas" class="patas"></div>
+      <p id="patasDescr" class="nota centrada"></p>
+      <p class="leyenda centrada"><span class="sem ok">apoyada</span> <span class="sem aire">en el aire</span></p>
+    </section>
+
+    <!-- ============ Estadísticas de la conexión ============ -->
+    <section class="panel panel-stats" id="panelStats" aria-labelledby="tStats">
+      <div class="panel-cab"><h2 id="tStats"><svg class="ico" aria-hidden="true"><use href="#i-red"/></svg>Conexión</h2></div>
+      <p class="desc">Estado del enlace con el servidor: fuente de datos en uso, mensajes por segundo, tráfico, latencia del pedido (solo con polling) y hace cuánto llegó el último dato.</p>
+      <dl class="datos stats">
+        <div><dt>Fuente activa</dt><dd id="statFuente">—</dd></div>
+        <div><dt>Mensajes por segundo</dt><dd id="statMsgs">—</dd></div>
+        <div><dt>Intervalo medio</dt><dd id="statIntervalo">—</dd></div>
+        <div><dt>Tráfico recibido</dt><dd id="statKb">—</dd></div>
+        <div><dt>Latencia del pedido</dt><dd id="statRtt">—</dd></div>
+        <div><dt>Último dato</dt><dd id="statUltimo">—</dd></div>
+        <div><dt>Mensajes descartados</dt><dd id="statInvalidos">0</dd></div>
+      </dl>
+    </section>
+
+    <!-- ============ Historial de temperatura ============ -->
+    <section class="panel panel-temp" id="panelTemp" aria-labelledby="tTemp">
+      <div class="panel-cab">
+        <h2 id="tTemp"><svg class="ico" aria-hidden="true"><use href="#i-grafico"/></svg>Historial de temperatura por motor</h2>
+        <span class="nota">ventana de 300 muestras</span>
+      </div>
+      <p class="desc">Temperatura de cada motor en el tiempo. Las líneas punteadas son los límites del semáforo: 40 °C (amarillo) y 60 °C (rojo). Con las casillas se elige qué motores mostrar.</p>
+      <div class="selector-barra">
+        <button type="button" class="btn chico" id="btnTodos">Todos</button>
+        <button type="button" class="btn chico" id="btnNinguno">Ninguno</button>
+        <div id="selectorMotores" class="selector" role="group" aria-label="Motores en el gráfico"></div>
+      </div>
+      <div class="grafico alto"><canvas id="chartTemp" aria-label="Historial de temperatura de los motores" role="img"></canvas></div>
+    </section>
+
+    <!-- ============ Captura y exportación ============ -->
+    <section class="panel panel-captura" id="panelCaptura" aria-labelledby="tCaptura">
+      <div class="panel-cab"><h2 id="tCaptura"><svg class="ico" aria-hidden="true"><use href="#i-captura"/></svg>Captura y exportación</h2></div>
+      <p class="desc">Guarda el estado actual de todos los paneles como una muestra y permite descargarlas en un archivo CSV. El archivo se genera en el navegador: no pasa por el servidor.</p>
+      <div class="acciones">
+        <button type="button" class="btn primario" id="btnCapturar" disabled>Capturar muestra</button>
+        <button type="button" class="btn" id="btnExportar" disabled>Exportar CSV</button>
+        <button type="button" class="btn peligro" id="btnVaciar" disabled>Vaciar</button>
+      </div>
+      <p class="contador"><b id="contMuestras">0</b> muestras en la sesión</p>
+      <label class="check">
+        <input type="checkbox" id="chkAlertas" checked>
+        Alertas automáticas: si un motor supera 60 °C, avisar y registrar una muestra sin tocar nada
+      </label>
+      <ol id="ultimasMuestras" class="ultimas" aria-label="Últimas muestras capturadas"></ol>
+    </section>
+
+  </main>
+
+  <div id="toasts" class="toasts" aria-live="polite"></div>
+
+  <footer class="pie">
+    TP05 · Desarrollo de Aplicaciones II · UADE. Solo lectura: este dashboard no envía ningún comando al robot.
+  </footer>
+
+  <script src="dashboard.js"></script>
+</body>
+</html>
