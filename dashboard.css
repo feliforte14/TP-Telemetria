@@ -219,6 +219,12 @@ td.temp.sin-dato .pill-temp { background: var(--sin-dato); color: #fff; }
 .patas-lista .item { padding: 6px 12px; border-radius: 999px; background: var(--borde); font-weight: 600; font-size: .85rem; }
 .patas-lista .item.apoyada { background: var(--ok); color: var(--texto-sobre-ok); }
 
+/* ----- Historial de temperatura ------------------------------------------ */
+.selector-barra { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 8px; }
+.selector { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: .78rem; max-height: 96px; overflow: auto; flex: 1; min-width: 12rem; }
+.selector label { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; white-space: nowrap; }
+.selector i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+
 /* ----- Avisos ------------------------------------------------------------- */
 .toasts { position: fixed; right: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 8px; z-index: 40; max-width: min(92vw, 22rem); }
 .toast {

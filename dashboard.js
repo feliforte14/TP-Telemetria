@@ -76,6 +76,21 @@ function fmt(n, decimales = 1) {
   return (typeof n === 'number' && Number.isFinite(n)) ? n.toFixed(decimales) : '—';
 }
 
+/** Buffer circular de tamaño fijo: al llenarse descarta la muestra más antigua. */
+class RingBuffer {
+  constructor(capacidad) {
+    this.capacidad = capacidad;
+    this.items = [];
+  }
+  push(valor) {
+    this.items.push(valor);
+    if (this.items.length > this.capacidad) this.items.shift();
+  }
+  get length() { return this.items.length; }
+  toArray() { return this.items.slice(); }
+  clear() { this.items.length = 0; }
+}
+
 /** Revisa que un mensaje tenga la forma del contrato (API.md). */
 function validarTelemetria(d) {
   return !!d && typeof d === 'object'
@@ -323,7 +338,7 @@ class Telemetria {
 /* Exportación para las pruebas con Node (en el navegador no existe `module`). */
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
-    CONFIG, clasificarTemp, fmt, validarTelemetria, normalizarBase, wsUrl, Telemetria, nombreDeMotor,
+    CONFIG, clasificarTemp, fmt, RingBuffer, validarTelemetria, normalizarBase, wsUrl, Telemetria, nombreDeMotor,
   };
 }
 
@@ -342,6 +357,34 @@ function crear(tag, clase, texto) {
   if (texto !== undefined) el.textContent = texto;
   return el;
 }
+
+const COLORES_IMU = { roll: '#60a5fa', pitch: '#34d399', yaw: '#fbbf24' };
+
+function colorMotor(indice, total) {
+  return 'hsl(' + Math.round((indice * 360) / Math.max(total, 1)) + ', 70%, 60%)';
+}
+
+function configurarChartJs() {
+  if (typeof Chart === 'undefined') return false;
+  Chart.defaults.color = '#94a3b8';
+  Chart.defaults.borderColor = 'rgba(148, 163, 184, .18)';
+  Chart.defaults.font.family = 'system-ui, sans-serif';
+  Chart.defaults.animation = false;
+  return true;
+}
+
+const opcionesLinea = (etiquetaY) => ({
+  responsive: true,
+  maintainAspectRatio: false,
+  animation: false,
+  interaction: { mode: 'index', intersect: false },
+  elements: { point: { radius: 0 }, line: { borderWidth: 1.6, tension: 0 } },
+  scales: {
+    x: { ticks: { maxTicksLimit: 6 }, title: { display: true, text: 'tiempo del servidor (s)' } },
+    y: { title: { display: true, text: etiquetaY } },
+  },
+  plugins: { legend: { labels: { boxWidth: 12 } } },
+});
 
 /* ---------- Panel de motores ---------- */
 const PanelMotores = {
@@ -391,6 +434,106 @@ const PanelMotores = {
   },
 };
 
+/* ---------- Panel IMU (números + gráfico con buffer circular) ---------- */
+const PanelIMU = {
+  chart: null,
+  etiquetas: new RingBuffer(CONFIG.HIST_SIZE),
+  series: { roll: new RingBuffer(CONFIG.HIST_SIZE), pitch: new RingBuffer(CONFIG.HIST_SIZE), yaw: new RingBuffer(CONFIG.HIST_SIZE) },
+  construir() {
+    if (this.chart || !configurarChartJs()) return;
+    this.chart = new Chart($('chartImu'), {
+      type: 'line',
+      data: {
+        labels: [],
+        datasets: ['roll', 'pitch', 'yaw'].map((k) => ({
+          label: k[0].toUpperCase() + k.slice(1) + ' (°)', data: [], borderColor: COLORES_IMU[k], backgroundColor: COLORES_IMU[k],
+        })),
+      },
+      options: opcionesLinea('grados'),
+    });
+  },
+  actualizar(imu, ts) {
+    $('roll').textContent = fmt(imu.roll, 2) + ' °';
+    $('pitch').textContent = fmt(imu.pitch, 2) + ' °';
+    $('yaw').textContent = fmt(imu.yaw, 2) + ' °';
+    $('ax').textContent = fmt(imu.ax, 3);
+    $('ay').textContent = fmt(imu.ay, 3);
+    $('az').textContent = fmt(imu.az, 3);
+
+    this.etiquetas.push(typeof ts === 'number' ? ts.toFixed(1) : '');
+    for (const k of Object.keys(this.series)) this.series[k].push(typeof imu[k] === 'number' ? imu[k] : null);
+    const n = this.etiquetas.length;
+    $('imuBuffer').textContent = n + ' / ' + CONFIG.HIST_SIZE + ' muestras' + (n < CONFIG.MIN_GRAFICO ? ' (juntando…)' : '');
+    if (this.chart) {
+      this.chart.data.labels = this.etiquetas.toArray();
+      ['roll', 'pitch', 'yaw'].forEach((k, i) => { this.chart.data.datasets[i].data = this.series[k].toArray(); });
+      this.chart.update('none');
+    }
+  },
+};
+
+/* ---------- Historial de temperatura por motor ---------- */
+const PanelTemp = {
+  chart: null,
+  etiquetas: new RingBuffer(CONFIG.HIST_SIZE),
+  series: [],
+  construir(motores) {
+    this.series = motores.map(() => new RingBuffer(CONFIG.HIST_SIZE));
+    this.etiquetas.clear();
+    if (this.chart) { this.chart.destroy(); this.chart = null; }
+
+    const selector = $('selectorMotores');
+    selector.replaceChildren();
+    motores.forEach((m, i) => {
+      const label = crear('label');
+      const chk = crear('input');
+      chk.type = 'checkbox';
+      chk.checked = i < 3;                       // por defecto, los tres primeros
+      chk.dataset.indice = String(i);
+      chk.addEventListener('change', () => this._visibilidad());
+      const sw = crear('i');
+      sw.style.background = colorMotor(i, motores.length);
+      label.append(chk, sw, document.createTextNode(nombreDeMotor(m, motores.length)));
+      selector.appendChild(label);
+    });
+
+    if (!configurarChartJs()) return;
+    const datasets = motores.map((m, i) => ({
+      label: nombreDeMotor(m, motores.length), data: [],
+      borderColor: colorMotor(i, motores.length), backgroundColor: colorMotor(i, motores.length), hidden: i >= 3,
+    }));
+    // Líneas de referencia con los umbrales del semáforo
+    datasets.push({ label: 'Umbral amarillo (40 °C)', data: [], borderColor: '#ffc107', borderDash: [6, 4], borderWidth: 1, pointRadius: 0 });
+    datasets.push({ label: 'Umbral rojo (60 °C)', data: [], borderColor: '#f44336', borderDash: [6, 4], borderWidth: 1, pointRadius: 0 });
+    const opciones = opcionesLinea('°C');
+    opciones.plugins.legend.labels.filter = (item) => !item.hidden;     // la leyenda solo muestra los motores visibles
+    this.chart = new Chart($('chartTemp'), { type: 'line', data: { labels: [], datasets }, options: opciones });
+  },
+  _visibilidad() {
+    if (!this.chart) return;
+    document.querySelectorAll('#selectorMotores input').forEach((chk) => {
+      this.chart.setDatasetVisibility(Number(chk.dataset.indice), chk.checked);
+    });
+    this.chart.update('none');
+  },
+  marcarTodos(valor) {
+    document.querySelectorAll('#selectorMotores input').forEach((chk) => { chk.checked = valor; });
+    this._visibilidad();
+  },
+  actualizar(motores, ts) {
+    this.etiquetas.push(typeof ts === 'number' ? ts.toFixed(1) : '');
+    motores.forEach((m, i) => { if (this.series[i]) this.series[i].push(typeof m.temperatura === 'number' ? m.temperatura : null); });
+    if (!this.chart) return;
+    const n = this.etiquetas.length;
+    this.chart.data.labels = this.etiquetas.toArray();
+    this.series.forEach((s, i) => { this.chart.data.datasets[i].data = s.toArray(); });
+    const k = this.series.length;
+    this.chart.data.datasets[k].data = new Array(n).fill(CONFIG.UMBRAL_VERDE);
+    this.chart.data.datasets[k + 1].data = new Array(n).fill(CONFIG.UMBRAL_ROJO);
+    this.chart.update('none');
+  },
+};
+
 /* ============================================================================
  * 5. APLICACIÓN
  * ========================================================================== */
@@ -435,6 +578,7 @@ function iniciarApp() {
     modeloActual = data.modelo;
     cantMotores = data.motores.length;
     PanelMotores.construir(data.motores);
+    PanelTemp.construir(data.motores);
     $('nombreRobot').textContent = 'Unitree ' + String(data.modelo || '').toUpperCase() + ' · ' + cantMotores + ' motores';
     fetch(telemetria.base + '/info', { cache: 'no-store' })
       .then((r) => (r.ok ? r.json() : null))
@@ -458,8 +602,14 @@ function iniciarApp() {
     if (data.modelo !== modeloActual || data.motores.length !== cantMotores) prepararModelo(data);
     ultimo = data;
     PanelMotores.actualizar(data.motores);
+    PanelIMU.actualizar(data.imu, data.ts);
+    PanelTemp.actualizar(data.motores, data.ts);
 
   });
+
+  /* ---------- selector de motores del gráfico ---------- */
+  $('btnTodos').addEventListener('click', () => PanelTemp.marcarTodos(true));
+  $('btnNinguno').addEventListener('click', () => PanelTemp.marcarTodos(false));
 
   /* ---------- conexión: servidor y fuente ---------- */
   let baseActual = null;
@@ -494,6 +644,8 @@ function iniciarApp() {
   }, 500);
 
   /* ---------- arranque ---------- */
+  PanelIMU.construir();
+  if (typeof Chart === 'undefined') toast('No se pudo cargar Chart.js (¿sin internet?). Los gráficos están desactivados; el resto funciona.', 'aviso');
   if (forzarTemp) {
     const av = $('avisoPrueba');
     av.hidden = false;

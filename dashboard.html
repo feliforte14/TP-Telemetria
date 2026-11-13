@@ -153,6 +153,21 @@
       </dl>
     </section>
 
+    <!-- ============ Historial de temperatura ============ -->
+    <section class="panel panel-temp" id="panelTemp" aria-labelledby="tTemp">
+      <div class="panel-cab">
+        <h2 id="tTemp">Historial de temperatura por motor</h2>
+        <span class="nota">ventana de 300 muestras</span>
+      </div>
+      <p class="desc">Temperatura de cada motor en el tiempo. Las líneas punteadas son los límites del semáforo: 40 °C (amarillo) y 60 °C (rojo). Con las casillas se elige qué motores mostrar.</p>
+      <div class="selector-barra">
+        <button type="button" class="btn chico" id="btnTodos">Todos</button>
+        <button type="button" class="btn chico" id="btnNinguno">Ninguno</button>
+        <div id="selectorMotores" class="selector" role="group" aria-label="Motores en el gráfico"></div>
+      </div>
+      <div class="grafico alto"><canvas id="chartTemp" aria-label="Historial de temperatura de los motores" role="img"></canvas></div>
+    </section>
+
   </main>
 
   <div id="toasts" class="toasts" aria-live="polite"></div>
