@@ -71,6 +71,16 @@ function nombreDeMotor(motor, total) {
   return (porDefecto && porDefecto[id]) || ('Motor ' + id);
 }
 
+/** Porcentaje de batería acotado a 0-100 (o 0 si no es un número). */
+function limitarPorcentaje(soc) {
+  return (typeof soc === 'number' && Number.isFinite(soc)) ? Math.max(0, Math.min(100, soc)) : 0;
+}
+
+/** Color de la barra de batería según el nivel. */
+function colorBateria(pct) {
+  return pct < 20 ? 'var(--hot)' : pct < 40 ? 'var(--warn)' : 'var(--ok)';
+}
+
 /** Formatea un número para mostrarlo; '—' si no es un número válido. */
 function fmt(n, decimales = 1) {
   return (typeof n === 'number' && Number.isFinite(n)) ? n.toFixed(decimales) : '—';
@@ -116,6 +126,15 @@ function normalizarBase(texto) {
 /** http://host:8001 -> ws://host:8001/ws */
 function wsUrl(base) {
   return base.replace(/^http/i, 'ws') + '/ws';
+}
+
+/** Mínimo, máximo y diferencia de un conjunto de valores. */
+function estadisticaCeldas(celdas) {
+  const v = celdas.filter(x => typeof x === 'number' && Number.isFinite(x));
+  if (!v.length) return null;
+  const min = Math.min(...v);
+  const max = Math.max(...v);
+  return { min, max, delta: max - min };
 }
 
 /* ============================================================================
@@ -338,7 +357,7 @@ class Telemetria {
 /* Exportación para las pruebas con Node (en el navegador no existe `module`). */
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
-    CONFIG, clasificarTemp, fmt, RingBuffer, validarTelemetria, normalizarBase, wsUrl, Telemetria, nombreDeMotor,
+    CONFIG, clasificarTemp, fmt, RingBuffer, validarTelemetria, normalizarBase, wsUrl, estadisticaCeldas, Telemetria, nombreDeMotor, limitarPorcentaje, colorBateria,
   };
 }
 
@@ -469,6 +488,88 @@ const PanelIMU = {
       ['roll', 'pitch', 'yaw'].forEach((k, i) => { this.chart.data.datasets[i].data = this.series[k].toArray(); });
       this.chart.update('none');
     }
+  },
+};
+
+/* ---------- Panel BMS ---------- */
+const PanelBMS = {
+  actualizar(bms) {
+    const soc = bms.soc;
+    $('soc').textContent = typeof soc === 'number' ? fmt(soc, 0) + ' %' : '—';
+    const barra = $('socBarra');
+    const pct = limitarPorcentaje(soc);
+    barra.style.width = pct + '%';
+    barra.style.background = colorBateria(pct);
+    $('bmsCorriente').textContent = typeof bms.corriente === 'number' ? fmt(bms.corriente, 0) + ' mA' : '—';
+    $('bmsTemp').textContent = typeof bms.temperatura === 'number' ? fmt(bms.temperatura, 1) + ' °C' : '—';
+
+    const celdas = Array.isArray(bms.celdas) ? bms.celdas : [];
+    const cont = $('celdas');
+    const est = estadisticaCeldas(celdas);
+    if (!est) {
+      if (!cont.classList.contains('sin-celdas')) {
+        cont.replaceChildren(crear('p', 'vacio', 'Este servidor no reporta voltajes de celda.'));
+        cont.classList.add('sin-celdas');
+      }
+      $('celdasResumen').textContent = '';
+      return;
+    }
+    if (cont.classList.contains('sin-celdas') || cont.children.length !== celdas.length) {
+      cont.classList.remove('sin-celdas');
+      cont.replaceChildren(...celdas.map((_, i) => {
+        const div = crear('div', 'celda');
+        div.appendChild(crear('span', '', 'C' + (i + 1)));
+        div.appendChild(crear('b', '', '—'));
+        const mini = crear('div', 'mini');
+        mini.appendChild(crear('i'));
+        div.appendChild(mini);
+        return div;
+      }));
+    }
+    celdas.forEach((v, i) => {
+      const div = cont.children[i];
+      div.classList.toggle('min', est.delta > 0 && v === est.min);
+      div.classList.toggle('max', est.delta > 0 && v === est.max);
+      div.querySelector('b').textContent = fmt(v, 3) + ' V';
+      // barra relativa a un rango típico de celda de litio (3,0 a 4,2 V)
+      const rel = Math.max(0, Math.min(1, (v - 3.0) / 1.2));
+      div.querySelector('i').style.width = (rel * 100) + '%';
+    });
+    $('celdasResumen').textContent = 'mín ' + fmt(est.min, 3) + ' V · máx ' + fmt(est.max, 3) + ' V · diferencia ' + fmt(est.delta * 1000, 0) + ' mV';
+  },
+};
+
+/* ---------- Historial de voltajes por celda (gráfico de línea, buffer circular) ---------- */
+const PanelCeldas = {
+  chart: null,
+  etiquetas: new RingBuffer(CONFIG.HIST_SIZE),
+  series: [],
+  _construir(n) {
+    this.series = Array.from({ length: n }, () => new RingBuffer(CONFIG.HIST_SIZE));
+    this.etiquetas.clear();
+    if (this.chart) { this.chart.destroy(); this.chart = null; }
+    if (!n || !configurarChartJs()) return;
+    const opciones = opcionesLinea('voltios');
+    opciones.plugins.legend.display = false;          // con 8 o 10 celdas la leyenda no aporta; el detalle sale al pasar el mouse
+    this.chart = new Chart($('chartCeldas'), {
+      type: 'line',
+      data: { labels: [], datasets: this.series.map((_, i) => ({
+        label: 'C' + (i + 1) + ' (V)', data: [], borderColor: colorMotor(i, n), backgroundColor: colorMotor(i, n),
+      })) },
+      options: opciones,
+    });
+  },
+  actualizar(celdas, ts) {
+    const validas = Array.isArray(celdas) ? celdas : [];
+    $('panelCeldasHist').hidden = validas.length === 0;
+    if (validas.length !== this.series.length) this._construir(validas.length);
+    if (!validas.length) return;
+    this.etiquetas.push(typeof ts === 'number' ? ts.toFixed(1) : '');
+    validas.forEach((v, i) => this.series[i].push(typeof v === 'number' ? v : null));
+    if (!this.chart) return;
+    this.chart.data.labels = this.etiquetas.toArray();
+    this.series.forEach((r, i) => { this.chart.data.datasets[i].data = r.toArray(); });
+    this.chart.update('none');
   },
 };
 
@@ -603,6 +704,8 @@ function iniciarApp() {
     ultimo = data;
     PanelMotores.actualizar(data.motores);
     PanelIMU.actualizar(data.imu, data.ts);
+    PanelBMS.actualizar(data.bms);
+    PanelCeldas.actualizar(data.bms.celdas, data.ts);
     PanelTemp.actualizar(data.motores, data.ts);
 
   });

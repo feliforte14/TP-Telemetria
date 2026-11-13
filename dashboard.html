@@ -128,6 +128,11 @@
       <h3>Voltaje por celda</h3>
       <div id="celdas" class="celdas"></div>
       <p id="celdasResumen" class="nota"></p>
+      <div id="panelCeldasHist" hidden>
+        <h3>Historial de voltajes por celda</h3>
+        <div class="grafico corto"><canvas id="chartCeldas" aria-label="Historial del voltaje de cada celda" role="img"></canvas></div>
+        <p class="desc-grafico">Voltaje de cada celda en el tiempo: permite ver si alguna se separa del resto.</p>
+      </div>
     </section>
 
     <!-- ============ Panel 4: Fuerzas por pata ============ -->
