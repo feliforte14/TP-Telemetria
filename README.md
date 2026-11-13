@@ -1,4 +1,4 @@
-# Dashboard web de telemetría para robots Unitree (Go2 y G1)
+# Dashboard web de telemetría para el robot Unitree Go2
 
 TP05 de **Desarrollo de Aplicaciones II** (UADE). Es la versión web del monitor de motores Unitree (*electroSim*): una página que muestra en tiempo real el estado de un robot (motores, inclinación, batería y apoyo de las patas), permite guardar muestras y exportarlas a un archivo CSV.
 
@@ -24,8 +24,8 @@ El dashboard se conecta a un servidor de telemetría (el backend FastAPI que pro
 
 | Panel | Qué muestra |
 |---|---|
-| **Gemelo digital** | Silueta del robot (vista superior del Go2, frontal del G1) con cada articulación coloreada según el semáforo de su motor. Los pies se iluminan al tocar el suelo. Al pasar el mouse por una articulación se resalta su fila en la tabla y al hacer clic se salta a ella. |
-| **Motores** | Una fila por motor (12 en el Go2, 29 en el G1): **temperatura con semáforo** (verde menos de 40 °C, amarillo de 40 a 60, rojo más de 60), minigráfico de **tendencia** de los últimos 60 datos, ángulo en grados, velocidad angular en rad/s y torque estimado en N·m. La tabla se ordena por temperatura y hay una vista de **mapa de calor** agrupada por pata o articulación. |
+| **Gemelo digital** | Silueta del robot (vista superior del Go2) con cada articulación coloreada según el semáforo de su motor. Los pies se iluminan al tocar el suelo. Al pasar el mouse por una articulación se resalta su fila en la tabla y al hacer clic se salta a ella. |
+| **Motores** | Una fila por motor (12 en el Go2): **temperatura con semáforo** (verde menos de 40 °C, amarillo de 40 a 60, rojo más de 60), minigráfico de **tendencia** de los últimos 60 datos, ángulo en grados, velocidad angular en rad/s y torque estimado en N·m. La tabla se ordena por temperatura y hay una vista de **mapa de calor** agrupada por pata o articulación. |
 | **IMU** | Inclinación del robot en grados (*roll*: giro lateral, *pitch*: cabeceo, *yaw*: rumbo) y aceleración en m/s². Incluye un horizonte artificial, una brújula y un gráfico histórico de las últimas 300 muestras. |
 | **Batería (BMS)** | Carga restante (%), corriente (mA), temperatura (°C) y voltaje de cada celda, con la celda más baja y la más alta resaltadas, y un gráfico histórico por celda. |
 | **Fuerzas por pata** | Si cada pata está apoyada en el suelo o en el aire (FR delantera derecha, FL delantera izquierda, RR trasera derecha, RL trasera izquierda). |
@@ -38,7 +38,7 @@ Además:
 - **Resumen de un vistazo:** tarjetas fijas con la temperatura máxima (y en qué motor), los motores en riesgo, la batería, las patas apoyadas y las muestras capturadas.
 - **Alertas automáticas:** si un motor supera 60 °C se avisa en pantalla y se registra una muestra sin tocar nada.
 - **Pérdida de conexión:** aviso rojo visible, los paneles se atenúan mostrando los últimos valores, y se reintenta solo. La página nunca se rompe.
-- **Go2 o G1:** la cantidad de motores y los nombres salen de los datos. Un selector permite pedir el robot (`go2` o `g1`).
+- **Robot Go2:** la cantidad de motores y los nombres salen de los datos. Un selector permite pedir explícitamente el Go2 o el robot que atienda el servidor.
 - **Identidad visual de «centro de mando»:** fondo de plano técnico, paneles numerados con esquinas marcadas, cifras en tipografía monoespaciada, batería segmentada y un pulso en el indicador de conexión que late con cada dato recibido (se desactiva si el sistema pide reducir animaciones).
 - **Tema oscuro («mando») y claro («plano»)** y **pantalla completa**, pensados para proyectar en el laboratorio. Se adapta a tablet y celular.
 - **Solo lectura:** el dashboard no envía ningún comando al robot.
@@ -135,7 +135,7 @@ stateDiagram-v2
 
 Cada mensaje se valida contra el contrato (si no tiene la forma esperada se descarta y se cuenta). Un detector revisa cada segundo que sigan llegando datos, aunque el navegador no avise del corte.
 
-Un **robot elegido** (`?modelo=go2` o `g1`) se pide como `GET /telemetria?modelo=…`. El WebSocket no admite parámetros, así que con un robot elegido se usa polling. Si el servidor atiende otro robot, el aviso muestra el motivo que da el servidor.
+Un **robot elegido** (`?modelo=go2`) se pide como `GET /telemetria?modelo=…`. El WebSocket no admite parámetros, así que con un robot elegido se usa polling. Si el servidor atiende otro robot, el aviso muestra el motivo que da el servidor.
 
 ### Gráficos con buffer circular
 
@@ -151,7 +151,7 @@ Cada muestra es una fila. Las columnas son: `fecha_hora` (UTC), `hora_local`, `t
 
 - **Semáforo:** menos de 40 °C verde, de 40 a 60 °C amarillo, más de 60 °C rojo (60,0 °C cuenta como amarillo).
 - **Alertas:** se disparan al pasar los 60 °C y se rearman recién al bajar de 58 °C, para que un motor en el límite no avise sin parar. Si varios motores cruzan el límite a la vez, se registra una sola muestra.
-- **Nombres de los motores:** los manda el servidor; si no, se usan los estándar del Go2 y del G1.
+- **Nombres de los motores:** los manda el servidor; si no, se usan los estándar del Go2.
 - **Preferencias:** servidor, fuente, robot y tema se recuerdan en el navegador.
 
 ---
@@ -195,8 +195,6 @@ python arrancar_api.py --demo --robot go2
 
 El servidor imprime la dirección a la que hay que pegarle, por ejemplo `http://192.168.0.5:8001`. Para comprobar que anda, abrí `http://localhost:8001/telemetria` en el navegador: tiene que aparecer un JSON.
 
-Para probar con el **G1** (29 motores), usá `--robot g1`. Si querés tener los dos a la vez, el segundo en otro puerto: `python arrancar_api.py --demo --robot g1 --puerto 8002`.
-
 ### Paso 2. Abrir el dashboard
 
 ```bash
@@ -220,7 +218,7 @@ Si el servidor de telemetría está en la misma máquina, el dashboard lo encuen
 |---|---|
 | `?api=http://IP:8001` | Servidor de telemetría. |
 | `?fuente=auto`, `ws` o `polling` | Fuente de datos. |
-| `?modelo=go2` o `g1` | Robot a pedir (usa polling). |
+| `?modelo=go2` | Robot a pedir (usa polling). |
 | `?forzarTemp=25` | Suma 25 °C a las temperaturas mostradas, **solo para verificar el semáforo en rojo**, porque el modo demo no pasa de unos 43 °C. El dashboard lo avisa en pantalla. |
 
 ---
@@ -272,14 +270,14 @@ TP-Telemetria/
 
 ## 6. Pruebas
 
-Son 28 pruebas, sin dependencias. Hace falta Node.js (probado con la versión 22):
+Son 26 pruebas, sin dependencias. Hace falta Node.js (probado con la versión 22):
 
 ```bash
 node pruebas/test_logica.js
 node pruebas/test_datos.js
 ```
 
-Cubren el semáforo, la disposición del gemelo digital (cada articulación dentro del dibujo y sin superponerse, simetría izquierda-derecha), el cálculo de las tendencias, el buffer circular, el armado y el escape del CSV, las alertas con su histéresis, y la capa de datos contra un servidor falso: polling, robot elegido, error 409, caída del servidor y reconexión.
+Cubren el semáforo, la disposición del gemelo digital (cada articulación dentro del dibujo y sin superponerse), el cálculo de las tendencias, el buffer circular, el armado y el escape del CSV, las alertas con su histéresis, y la capa de datos contra un servidor falso: polling, robot elegido, error 409, caída del servidor y reconexión.
 
 ---
 
@@ -300,7 +298,7 @@ Cubren el semáforo, la disposición del gemelo digital (cada articulación dent
 ## 8. Limitaciones y notas
 
 - **Algunos valores del simulador son derivados:** el simulador mueve el robot pero no calcula física. El ángulo y la velocidad de los motores y el yaw son reales; el torque, la temperatura, el roll y el pitch, las fuerzas de pata y la batería se derivan del movimiento. Con el robot real esos números serán otros: conviene tenerlo presente si se usan umbrales o alarmas.
-- **El G1 no reporta patas** de la forma del Go2: en ese caso el panel muestra el contacto de los pies que informe el servidor, o avisa que no los reporta.
+- **Solo Go2:** el dashboard está pensado para el Go2 (12 motores). Si el servidor entrega otra cantidad de motores, la tabla y los gráficos funcionan igual, pero el gemelo digital se oculta.
 - **El servidor de la cátedra escucha en todas las interfaces y tiene CORS abierto.** Usarlo solo en la red cerrada del laboratorio y no exponerlo a internet.
 
 ---
@@ -308,13 +306,13 @@ Cubren el semáforo, la disposición del gemelo digital (cada articulación dent
 ## 9. Entregables
 
 - **Código:** `dashboard.html`, `dashboard.css` y `dashboard.js`.
-- **Capturas de pantalla** en [`entregables/capturas/`](entregables/capturas/): dashboard completo con el gemelo digital, los cuatro paneles y el semáforo, tema claro, mapa de calor, captura y exportación, semáforo en rojo (con `?forzarTemp=25`, temperaturas simuladas y avisado en la propia captura), G1 con 29 motores y pérdida de conexión.
+- **Capturas de pantalla** en [`entregables/capturas/`](entregables/capturas/): dashboard completo con el gemelo digital, los cuatro paneles y el semáforo, tema claro, mapa de calor, captura y exportación, semáforo en rojo (con `?forzarTemp=25`, temperaturas simuladas y avisado en la propia captura), y pérdida de conexión.
 - **CSV exportado** en [`entregables/csv/`](entregables/csv/): sesión de prueba con 12 muestras capturadas manualmente con el botón.
 - **Documento técnico:** pendiente.
 
 | Semáforo en rojo (simulado) | Pérdida de conexión |
 |---|---|
-| ![Semáforo en rojo](entregables/capturas/05-semaforo-en-rojo-simulado.png) | ![Sin conexión](entregables/capturas/07-sin-conexion.png) |
+| ![Semáforo en rojo](entregables/capturas/05-semaforo-en-rojo-simulado.png) | ![Sin conexión](entregables/capturas/06-sin-conexion.png) |
 
 ---
 

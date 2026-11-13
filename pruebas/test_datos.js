@@ -12,7 +12,7 @@ const dato = (modelo, n, conNombre = true) => ({ modelo, ts: 1.5,
   await t('nombreDeMotor: del servidor, estándar o genérico', () => {
     assert.equal(D.nombreDeMotor({id:0, nombre:'abc'}, 12), 'abc');
     assert.equal(D.nombreDeMotor({id:4}, 12), 'FL_thigh');
-    assert.equal(D.nombreDeMotor({id:28}, 29), 'R_wrist_yaw');
+    assert.equal(D.nombreDeMotor({id:28}, 29), 'Motor 28');
     assert.equal(D.nombreDeMotor({id:3}, 7), 'Motor 3');
   });
   await t('aplanarMuestra usa nombres estándar si el servidor no manda nombre', () => {

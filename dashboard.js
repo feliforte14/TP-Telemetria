@@ -57,14 +57,9 @@ function clasificarTemp(t) {
 /* Nombres de los motores por modelo. Los usa solo si el servidor no manda `nombre`. */
 const NOMBRES_POR_DEFECTO = Object.freeze({
   12: ['FR_hip', 'FR_thigh', 'FR_calf', 'FL_hip', 'FL_thigh', 'FL_calf', 'RR_hip', 'RR_thigh', 'RR_calf', 'RL_hip', 'RL_thigh', 'RL_calf'],
-  29: ['L_hip_yaw', 'L_hip_roll', 'L_hip_pitch', 'L_knee', 'L_ankle_pitch', 'L_ankle_roll',
-       'R_hip_yaw', 'R_hip_roll', 'R_hip_pitch', 'R_knee', 'R_ankle_pitch', 'R_ankle_roll',
-       'torso_yaw', 'torso_roll', 'torso_pitch',
-       'L_shoulder_pitch', 'L_shoulder_roll', 'L_shoulder_yaw', 'L_elbow', 'L_wrist_roll', 'L_wrist_pitch', 'L_wrist_yaw',
-       'R_shoulder_pitch', 'R_shoulder_roll', 'R_shoulder_yaw', 'R_elbow', 'R_wrist_roll', 'R_wrist_pitch', 'R_wrist_yaw'],
 });
 
-/** Nombre de un motor: el que manda el servidor; si no, el estándar del modelo (12 = Go2, 29 = G1); si no, "Motor N". */
+/** Nombre de un motor: el que manda el servidor; si no, el estándar del Go2 (12 motores); si no, "Motor N". */
 function nombreDeMotor(motor, total) {
   if (motor && typeof motor.nombre === 'string' && motor.nombre) return motor.nombre;
   const porDefecto = NOMBRES_POR_DEFECTO[total];
@@ -134,10 +129,9 @@ function wsUrl(base) {
 
 /**
  * Geometría del gemelo digital: dónde va cada articulación en la silueta (coordenadas del SVG).
- * 12 motores = cuadrúpedo (Go2, visto desde arriba); 29 = humanoide (G1, visto de frente); otro = sin silueta.
+ * 12 motores = cuadrúpedo (Go2, visto desde arriba); otra cantidad = sin silueta.
  */
 function disposicionGemelo(total) {
-  const espejoH = (p) => [320 - p[0], p[1]];
   if (total === 12) {
     // Se define la pata delantera derecha (FR), que apunta hacia adelante, y las otras tres salen por simetría.
     const FR = { hip: [205, 110], thigh: [240, 98], calf: [266, 74], pie: [280, 44] };
@@ -159,34 +153,6 @@ function disposicionGemelo(total) {
       tipo: 'cuadrupedo', titulo: 'Cuadrúpedo · vista superior', ancho: 320, alto: 360, radioArt: 9,
       decoracion: [{ tipo: 'rect', x: 120, y: 78, ancho: 80, alto: 204, radio: 26 }],
       huesos, articulaciones, pies, etiquetas,
-    };
-  }
-  if (total === 29) {
-    // Se define el lado izquierdo del robot (a la derecha de quien lo mira) y el derecho sale por simetría.
-    const izquierdo = {
-      L_shoulder_pitch: [224, 128], L_shoulder_roll: [240, 138], L_shoulder_yaw: [226, 150], L_elbow: [258, 208],
-      L_wrist_roll: [262, 266], L_wrist_pitch: [278, 274], L_wrist_yaw: [262, 282],
-      L_hip_yaw: [182, 272], L_hip_roll: [200, 272], L_hip_pitch: [191, 288], L_knee: [191, 352],
-      L_ankle_pitch: [183, 414], L_ankle_roll: [199, 414],
-    };
-    const articulaciones = { torso_yaw: [140, 240], torso_roll: [160, 240], torso_pitch: [180, 240] };
-    for (const [nombre, p] of Object.entries(izquierdo)) {
-      articulaciones[nombre] = p;
-      articulaciones['R_' + nombre.slice(2)] = espejoH(p);
-    }
-    const brazo = [[232, 138], [258, 208], [270, 274], [270, 306]];
-    const pierna = [[191, 280], [191, 352], [191, 414], [191, 446]];
-    return {
-      tipo: 'humanoide', titulo: 'Humanoide · vista frontal', ancho: 320, alto: 484, radioArt: 7,
-      decoracion: [
-        { tipo: 'poligono', puntos: '100,118 220,118 196,262 124,262' },
-        { tipo: 'circulo', cx: 160, cy: 62, r: 26 },
-        { tipo: 'linea', x1: 160, y1: 88, x2: 160, y2: 118 },
-      ],
-      huesos: [brazo, brazo.map(espejoH), pierna, pierna.map(espejoH)],
-      articulaciones,
-      pies: { L_foot: [191, 446], R_foot: espejoH([191, 446]) },
-      etiquetas: [{ texto: 'L', x: 191, y: 474 }, { texto: 'R', x: 129, y: 474 }],
     };
   }
   return null;
@@ -341,7 +307,7 @@ class Telemetria {
     this._emitir('estado', { estado, detalle, intentos: this.intentos });
   }
 
-  /** `modelo` ('go2' o 'g1') es opcional: se manda como ?modelo= en el polling. El WebSocket no permite elegir robot. */
+  /** `modelo` ('go2') es opcional: se manda como ?modelo= en el polling. El WebSocket no permite elegir robot. */
   iniciar(base, modo = 'auto', modelo = '') {
     this.detener();
     this.base = base;
@@ -650,7 +616,7 @@ const PanelMotores = {
     this._construirMapa(motores);
   },
 
-  /** Agrupa los motores por el prefijo del nombre (FR_hip -> grupo FR). Sirve para Go2 y G1. */
+  /** Agrupa los motores por el prefijo del nombre (FR_hip -> grupo FR).  */
   _construirMapa(motores) {
     const cont = $('mapaMotores');
     cont.replaceChildren();
@@ -1405,7 +1371,7 @@ function iniciarApp() {
   const fuenteGuardada = params.get('fuente') || leerAlmacenado('tp05.fuente');
   const fuente = ['auto', 'ws', 'polling'].includes(fuenteGuardada) ? fuenteGuardada : 'auto';
   const modeloGuardado = (params.get('modelo') || leerAlmacenado('tp05.modelo') || '').toLowerCase();
-  const modelo = ['go2', 'g1'].includes(modeloGuardado) ? modeloGuardado : '';
+  const modelo = modeloGuardado === 'go2' ? modeloGuardado : '';
   const indicada = params.get('api') || leerAlmacenado('tp05.api');
   if (indicada) {
     let base;

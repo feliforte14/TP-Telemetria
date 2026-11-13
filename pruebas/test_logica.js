@@ -77,16 +77,6 @@ t('gemelo digital: cuadrúpedo (12 motores) con las 12 articulaciones y las 4 pa
   assert.deepEqual(Object.keys(g.pies).sort(), ['FL', 'FR', 'RL', 'RR']);
   assert.ok(dentro(g), 'hay puntos fuera del lienzo'); assert.ok(sinSolapes(g), 'hay articulaciones superpuestas');
 });
-t('gemelo digital: humanoide (29 motores) con las 29 articulaciones y los 2 pies', () => {
-  const g = D.disposicionGemelo(29); assert.equal(g.tipo, 'humanoide');
-  for (let i = 0; i < 29; i++) assert.ok(g.articulaciones[D.nombreDeMotor({ id: i }, 29)], 'falta la articulación ' + i);
-  assert.deepEqual(Object.keys(g.pies).sort(), ['L_foot', 'R_foot']);
-  assert.ok(dentro(g), 'hay puntos fuera del lienzo'); assert.ok(sinSolapes(g), 'hay articulaciones superpuestas');
-});
-t('gemelo digital: simetría izquierda y derecha del humanoide', () => {
-  const g = D.disposicionGemelo(29);
-  for (const n of ['hip_pitch', 'knee', 'shoulder_roll', 'elbow', 'wrist_yaw']) { const l = g.articulaciones['L_' + n], r = g.articulaciones['R_' + n]; assert.equal(l[0] + r[0], 320); assert.equal(l[1], r[1]); }
-});
 t('gemelo digital: un modelo desconocido no tiene silueta', () => { assert.equal(D.disposicionGemelo(7), null); assert.equal(D.disposicionGemelo(0), null); });
 t('tendencia: pocos datos no dibujan nada', () => { assert.equal(D.puntosTendencia([]), ''); assert.equal(D.puntosTendencia([30]), ''); assert.equal(D.puntosTendencia([null, undefined, NaN]), ''); });
 t('tendencia: una serie que sube dibuja una línea que sube', () => {
