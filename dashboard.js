@@ -131,6 +131,59 @@ function wsUrl(base) {
   return base.replace(/^http/i, 'ws') + '/ws';
 }
 
+/** Pasa un mensaje de la API a una fila plana (una columna por valor) para el CSV. */
+function aplanarMuestra(data, evento = 'manual', ahora = new Date()) {
+  const fila = {
+    fecha_hora: ahora.toISOString(),                                   // UTC, sin ambigüedad
+    hora_local: ahora.toLocaleTimeString('es-AR', { hour12: false }),   // la hora que ve el usuario
+    ts_servidor_s: data.ts,
+    modelo: data.modelo,
+    evento,
+  };
+  const imu = data.imu || {};
+  for (const k of ['roll', 'pitch', 'yaw', 'ax', 'ay', 'az']) fila['imu_' + k] = imu[k];
+
+  const bms = data.bms || {};
+  fila.bms_soc_pct = bms.soc;
+  fila.bms_corriente_ma = bms.corriente;
+  fila.bms_temperatura_c = bms.temperatura;
+  (bms.celdas || []).forEach((v, i) => { fila['bms_celda_' + (i + 1) + '_v'] = v; });
+
+  for (const [pata, valor] of Object.entries(data.fuerzas || {})) fila['pata_' + pata] = valor;
+
+  for (const m of data.motores || []) {
+    const base = 'm' + String(m.id).padStart(2, '0') + '_' + nombreDeMotor(m, (data.motores || []).length);
+    fila[base + '_temp_c'] = m.temperatura;
+    fila[base + '_angulo_deg'] = m.angulo;
+    fila[base + '_vel_rad_s'] = m.velocidad;
+    fila[base + '_torque_nm'] = m.torque;
+  }
+  return fila;
+}
+
+/** Escapa un valor para CSV. Evita además que Excel interprete texto como fórmula. */
+function escaparCSV(valor) {
+  if (valor === null || valor === undefined) return '';
+  if (typeof valor === 'number') return Number.isFinite(valor) ? String(valor) : '';
+  let s = String(valor);
+  if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
+  return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+
+/** Arma el texto CSV. Las columnas son la unión de las de todas las muestras (en orden de aparición). */
+function construirCSV(muestras) {
+  const columnas = [];
+  const vistas = new Set();
+  for (const m of muestras) {
+    for (const k of Object.keys(m)) {
+      if (!vistas.has(k)) { vistas.add(k); columnas.push(k); }
+    }
+  }
+  const lineas = [columnas.map(escaparCSV).join(',')];
+  for (const m of muestras) lineas.push(columnas.map(c => escaparCSV(m[c])).join(','));
+  return lineas.join('\r\n') + '\r\n';
+}
+
 /** Mínimo, máximo y diferencia de un conjunto de valores. */
 function estadisticaCeldas(celdas) {
   const v = celdas.filter(x => typeof x === 'number' && Number.isFinite(x));
@@ -138,6 +191,21 @@ function estadisticaCeldas(celdas) {
   const min = Math.min(...v);
   const max = Math.max(...v);
   return { min, max, delta: max - min };
+}
+
+/** Motores que pasaron a estar por encima del umbral rojo y todavía no estaban en alerta. */
+function motoresNuevosEnAlerta(motores, enAlerta) {
+  const nuevos = [];
+  for (const m of motores) {
+    const t = m.temperatura;
+    if (typeof t !== 'number') continue;
+    if (t > CONFIG.UMBRAL_ROJO) {
+      if (!enAlerta.has(m.id)) { enAlerta.add(m.id); nuevos.push(m); }
+    } else if (t < CONFIG.UMBRAL_ROJO - CONFIG.HISTERESIS_ALERTA) {
+      enAlerta.delete(m.id);
+    }
+  }
+  return nuevos;
 }
 
 /* ============================================================================
@@ -360,7 +428,7 @@ class Telemetria {
 /* Exportación para las pruebas con Node (en el navegador no existe `module`). */
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
-    CONFIG, clasificarTemp, fmt, RingBuffer, validarTelemetria, normalizarBase, wsUrl, estadisticaCeldas, Telemetria, nombreDeMotor, limitarPorcentaje, colorBateria,
+    CONFIG, clasificarTemp, fmt, RingBuffer, validarTelemetria, normalizarBase, wsUrl, aplanarMuestra, escaparCSV, construirCSV, estadisticaCeldas, motoresNuevosEnAlerta, Telemetria, nombreDeMotor, limitarPorcentaje, colorBateria,
   };
 }
 
@@ -709,11 +777,45 @@ const PanelTemp = {
 };
 
 /* ============================================================================
+ * 4. CAPTURA Y EXPORTACIÓN CSV (todo en el navegador, sin pasar por el servidor)
+ * ========================================================================== */
+
+const Captura = {
+  muestras: [],
+  agregar(data, evento) {
+    if (this.muestras.length >= CONFIG.MAX_MUESTRAS) this.muestras.shift();
+    const fila = aplanarMuestra(data, evento);
+    this.muestras.push(fila);
+    return fila;
+  },
+  vaciar() { this.muestras = []; },
+  exportar() {
+    if (!this.muestras.length) return false;
+    const csv = '﻿' + construirCSV(this.muestras);   // BOM: Excel reconoce las tildes
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const modelo = this.muestras[this.muestras.length - 1].modelo || 'robot';
+    const ahora = new Date();
+    const dos = (n) => String(n).padStart(2, '0');
+    const sello = ahora.getFullYear() + dos(ahora.getMonth() + 1) + dos(ahora.getDate()) + '-' + dos(ahora.getHours()) + dos(ahora.getMinutes()) + dos(ahora.getSeconds());   // hora local
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'telemetria_' + modelo + '_' + sello + '.csv';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    return true;
+  },
+};
+
+/* ============================================================================
  * 5. APLICACIÓN
  * ========================================================================== */
 
 function iniciarApp() {
   const telemetria = new Telemetria();
+  const enAlerta = new Set();
   let modeloActual = null;
   let cantMotores = 0;
   let ultimo = null;                 // último mensaje recibido (ya con el ajuste de prueba, si hay)
@@ -754,6 +856,7 @@ function iniciarApp() {
     PanelMotores.construir(data.motores);
     PanelTemp.construir(data.motores);
     PanelPatas.construir(Object.keys(data.fuerzas || {}));
+    enAlerta.clear();
     $('nombreRobot').textContent = 'Unitree ' + String(data.modelo || '').toUpperCase() + ' · ' + cantMotores + ' motores';
     fetch(telemetria.base + '/info', { cache: 'no-store' })
       .then((r) => (r.ok ? r.json() : null))
@@ -782,7 +885,50 @@ function iniciarApp() {
     PanelCeldas.actualizar(data.bms.celdas, data.ts);
     PanelPatas.actualizar(data.fuerzas);
     PanelTemp.actualizar(data.motores, data.ts);
+    $('btnCapturar').disabled = false;
 
+    if ($('chkAlertas').checked) {
+      // Si varios motores cruzan el umbral en el mismo mensaje, se avisa y se registra una sola vez.
+      const nuevos = motoresNuevosEnAlerta(data.motores, enAlerta);
+      if (nuevos.length) {
+        const nombres = nuevos.map((m) => nombreDeMotor(m, data.motores.length));
+        const maxT = Math.max(...nuevos.map((m) => m.temperatura));
+        toast('Más de ' + CONFIG.UMBRAL_ROJO + ' °C: ' + nombres.join(', ') + ' (máx. ' + fmt(maxT, 1) + ' °C)', 'alerta');
+        registrarCaptura('alerta_temp_' + nombres.join('+'));
+      }
+    }
+  });
+
+  /* ---------- captura y CSV ---------- */
+  function refrescarCaptura() {
+    const n = Captura.muestras.length;
+    $('contMuestras').textContent = n;
+    $('btnExportar').disabled = n === 0;
+    $('btnVaciar').disabled = n === 0;
+    const lista = $('ultimasMuestras');
+    lista.replaceChildren(...Captura.muestras.slice(-5).reverse().map((f) => {
+      const hora = new Date(f.fecha_hora).toLocaleTimeString('es-AR');
+      return crear('li', '', hora + ' · ' + f.evento + ' · roll ' + fmt(f.imu_roll, 1) + '° · batería ' + fmt(f.bms_soc_pct, 0) + ' %');
+    }));
+  }
+  function registrarCaptura(evento) {
+    if (!ultimo) { toast('Todavía no llegaron datos para capturar.', 'aviso'); return; }
+    Captura.agregar(ultimo, evento);
+    refrescarCaptura();
+  }
+  $('btnCapturar').addEventListener('click', () => {
+    registrarCaptura('manual');
+    toast('Muestra capturada (' + Captura.muestras.length + ').');
+  });
+  $('btnExportar').addEventListener('click', () => {
+    if (Captura.exportar()) toast('CSV generado con ' + Captura.muestras.length + ' muestras.');
+  });
+  $('btnVaciar').addEventListener('click', () => {
+    if (!Captura.muestras.length) return;
+    if (confirm('¿Borrar las ' + Captura.muestras.length + ' muestras capturadas?')) { Captura.vaciar(); refrescarCaptura(); }
+  });
+  window.addEventListener('beforeunload', (e) => {
+    if (Captura.muestras.length) { e.preventDefault(); e.returnValue = ''; }
   });
 
   /* ---------- selector de motores del gráfico ---------- */

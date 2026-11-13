@@ -225,6 +225,14 @@ td.temp.sin-dato .pill-temp { background: var(--sin-dato); color: #fff; }
 .selector label { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; white-space: nowrap; }
 .selector i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
 
+/* ----- Captura ------------------------------------------------------------ */
+.acciones { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
+.contador { margin: 10px 0 0; color: var(--texto-suave); font-size: .85rem; }
+.contador b { color: var(--texto); font-size: 1.1rem; }
+.check { display: flex; gap: 8px; align-items: flex-start; margin-top: 12px; font-size: .8rem; color: var(--texto-suave); }
+.ultimas { margin: 12px 0 0; padding-left: 1.3rem; font-size: .78rem; color: var(--texto-suave); max-height: 150px; overflow: auto; }
+.ultimas li { margin: 2px 0; font-variant-numeric: tabular-nums; }
+
 /* ----- Avisos ------------------------------------------------------------- */
 .toasts { position: fixed; right: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 8px; z-index: 40; max-width: min(92vw, 22rem); }
 .toast {
