@@ -132,6 +132,88 @@ function wsUrl(base) {
   return base.replace(/^http/i, 'ws') + '/ws';
 }
 
+/**
+ * Geometría del gemelo digital: dónde va cada articulación en la silueta (coordenadas del SVG).
+ * 12 motores = cuadrúpedo (Go2, visto desde arriba); 29 = humanoide (G1, visto de frente); otro = sin silueta.
+ */
+function disposicionGemelo(total) {
+  const espejoH = (p) => [320 - p[0], p[1]];
+  if (total === 12) {
+    // Se define la pata delantera derecha (FR), que apunta hacia adelante, y las otras tres salen por simetría.
+    const FR = { hip: [205, 110], thigh: [240, 98], calf: [266, 74], pie: [280, 44] };
+    const articulaciones = {};
+    const huesos = [];
+    const pies = {};
+    const etiquetas = [{ texto: '▲ FRENTE', x: 160, y: 60 }];
+    for (const [pata, [h, v]] of Object.entries({ FR: [false, false], FL: [true, false], RR: [false, true], RL: [true, true] })) {
+      const p = (xy) => [h ? 320 - xy[0] : xy[0], v ? 360 - xy[1] : xy[1]];
+      articulaciones[pata + '_hip'] = p(FR.hip);
+      articulaciones[pata + '_thigh'] = p(FR.thigh);
+      articulaciones[pata + '_calf'] = p(FR.calf);
+      pies[pata] = p(FR.pie);
+      huesos.push([p(FR.hip), p(FR.thigh), p(FR.calf), p(FR.pie)]);
+      const e = p([303, FR.pie[1] + 4]);
+      etiquetas.push({ texto: pata, x: e[0], y: e[1] });
+    }
+    return {
+      tipo: 'cuadrupedo', titulo: 'Cuadrúpedo · vista superior', ancho: 320, alto: 360, radioArt: 9,
+      decoracion: [{ tipo: 'rect', x: 120, y: 78, ancho: 80, alto: 204, radio: 26 }],
+      huesos, articulaciones, pies, etiquetas,
+    };
+  }
+  if (total === 29) {
+    // Se define el lado izquierdo del robot (a la derecha de quien lo mira) y el derecho sale por simetría.
+    const izquierdo = {
+      L_shoulder_pitch: [224, 128], L_shoulder_roll: [240, 138], L_shoulder_yaw: [226, 150], L_elbow: [258, 208],
+      L_wrist_roll: [262, 266], L_wrist_pitch: [278, 274], L_wrist_yaw: [262, 282],
+      L_hip_yaw: [182, 272], L_hip_roll: [200, 272], L_hip_pitch: [191, 288], L_knee: [191, 352],
+      L_ankle_pitch: [183, 414], L_ankle_roll: [199, 414],
+    };
+    const articulaciones = { torso_yaw: [140, 240], torso_roll: [160, 240], torso_pitch: [180, 240] };
+    for (const [nombre, p] of Object.entries(izquierdo)) {
+      articulaciones[nombre] = p;
+      articulaciones['R_' + nombre.slice(2)] = espejoH(p);
+    }
+    const brazo = [[232, 138], [258, 208], [270, 274], [270, 306]];
+    const pierna = [[191, 280], [191, 352], [191, 414], [191, 446]];
+    return {
+      tipo: 'humanoide', titulo: 'Humanoide · vista frontal', ancho: 320, alto: 484, radioArt: 7,
+      decoracion: [
+        { tipo: 'poligono', puntos: '100,118 220,118 196,262 124,262' },
+        { tipo: 'circulo', cx: 160, cy: 62, r: 26 },
+        { tipo: 'linea', x1: 160, y1: 88, x2: 160, y2: 118 },
+      ],
+      huesos: [brazo, brazo.map(espejoH), pierna, pierna.map(espejoH)],
+      articulaciones,
+      pies: { L_foot: [191, 446], R_foot: espejoH([191, 446]) },
+      etiquetas: [{ texto: 'L', x: 191, y: 474 }, { texto: 'R', x: 129, y: 474 }],
+    };
+  }
+  return null;
+}
+
+/**
+ * Puntos ("x,y x,y ...") de una línea de tendencia. Los valores se ubican a la derecha si hay menos que
+ * `capacidad`, así la línea "crece" desde el borde. Si casi no varían se usa un rango mínimo de 2 unidades,
+ * para no agrandar el ruido.
+ */
+function puntosTendencia(valores, ancho = 84, alto = 22, capacidad = valores.length) {
+  const v = valores.filter((x) => typeof x === 'number' && Number.isFinite(x));
+  if (v.length < 2) return '';
+  const min = Math.min(...v);
+  const max = Math.max(...v);
+  const rango = Math.max(max - min, 2);
+  const base = min - (rango - (max - min)) / 2;
+  const margen = 2;
+  const paso = ancho / Math.max(capacidad - 1, 1);
+  const inicio = Math.max(capacidad - v.length, 0);
+  return v.map((x, i) => {
+    const px = (inicio + i) * paso;
+    const py = alto - margen - ((x - base) / rango) * (alto - 2 * margen);
+    return px.toFixed(1) + ',' + py.toFixed(1);
+  }).join(' ');
+}
+
 /** Pasa un mensaje de la API a una fila plana (una columna por valor) para el CSV. */
 function aplanarMuestra(data, evento = 'manual', ahora = new Date()) {
   const fila = {
@@ -440,7 +522,7 @@ if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     CONFIG, clasificarTemp, fmt, RingBuffer, validarTelemetria, normalizarBase, wsUrl,
     aplanarMuestra, escaparCSV, construirCSV, estadisticaCeldas, motoresNuevosEnAlerta, Telemetria,
-    nombreDeMotor, limitarPorcentaje, colorBateria,
+    nombreDeMotor, limitarPorcentaje, colorBateria, disposicionGemelo, puntosTendencia,
   };
 }
 
@@ -520,6 +602,7 @@ const PanelMotores = {
   orden: 'ninguno',          // 'ninguno' | 'desc' | 'asc' (por temperatura)
   ordenDOM: [],
   ultimos: [],
+  historial: [],             // últimas 60 temperaturas de cada motor, para el minigráfico
 
   construir(motores) {
     const tbody = document.querySelector('#tablaMotores tbody');
@@ -529,20 +612,39 @@ const PanelMotores = {
       const pastilla = crear('span', 'pill-temp', '—');
       const temp = crear('td', 'temp sin-dato');
       temp.appendChild(pastilla);
+      const NS = 'http://www.w3.org/2000/svg';
+      const spark = document.createElementNS(NS, 'svg');
+      spark.setAttribute('viewBox', '0 0 84 22');
+      spark.setAttribute('preserveAspectRatio', 'none');
+      spark.setAttribute('class', 'spark sin-dato');
+      spark.setAttribute('aria-hidden', 'true');
+      const linea = document.createElementNS(NS, 'polyline');
+      spark.appendChild(linea);
+      const tdSpark = crear('td', 'tendencia');
+      tdSpark.appendChild(spark);
       const celdas = {
         tr,
         nombre: crear('td', '', nombreDeMotor(m, motores.length)),
         temp,
         tempTexto: pastilla,
         estado: crear('td', 'estado', '—'),
+        tendencia: tdSpark,
+        spark,
+        linea,
         angulo: crear('td', '', '—'),
         velocidad: crear('td', '', '—'),
         torque: crear('td', '', '—'),
       };
-      for (const k of ['nombre', 'temp', 'estado', 'angulo', 'velocidad', 'torque']) tr.appendChild(celdas[k]);
+      for (const k of ['nombre', 'temp', 'estado', 'tendencia', 'angulo', 'velocidad', 'torque']) tr.appendChild(celdas[k]);
       tbody.appendChild(tr);
       return celdas;
     });
+    this.filas.forEach((f, i) => {
+      // Pasar el mouse por una fila resalta su articulación en el gemelo digital, y al revés.
+      f.tr.addEventListener('mouseenter', () => Gemelo.resaltar(i, true));
+      f.tr.addEventListener('mouseleave', () => Gemelo.resaltar(i, false));
+    });
+    this.historial = motores.map(() => new RingBuffer(60));
     this.ordenDOM = this.filas.map((_, i) => i);
     this.ultimos = [];
     this._construirMapa(motores);
@@ -576,6 +678,22 @@ const PanelMotores = {
       fila.appendChild(mosaicos);
       cont.appendChild(fila);
     }
+  },
+
+  /** Resalta (o no) la fila de un motor en la tabla. */
+  resaltarFila(i, encendida) {
+    if (this.filas[i]) this.filas[i].tr.classList.toggle('resaltada', encendida);
+  },
+
+  /** Lleva la tabla hasta la fila de un motor y la hace destellar (clic en el gemelo digital). */
+  irAFila(i) {
+    const f = this.filas[i];
+    if (!f) return;
+    this.mostrarVista('tabla');
+    f.tr.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    f.tr.classList.remove('destello');
+    void f.tr.offsetWidth;                  // reinicia la animación
+    f.tr.classList.add('destello');
   },
 
   mostrarVista(vista) {
@@ -620,6 +738,11 @@ const PanelMotores = {
       f.angulo.textContent = fmt(m.angulo, 2);
       f.velocidad.textContent = fmt(m.velocidad, 3);
       f.torque.textContent = fmt(m.torque, 2);
+      if (this.historial[i]) {
+        this.historial[i].push(m.temperatura);
+        f.linea.setAttribute('points', puntosTendencia(this.historial[i].items, 84, 22, 60));
+        f.spark.setAttribute('class', 'spark ' + nivel);
+      }
       const mosaico = this.mosaicos[i];
       if (mosaico) {
         mosaico.className = 'mosaico ' + nivel;
@@ -635,6 +758,94 @@ const PanelMotores = {
     $('chipHot').textContent = cuenta.hot;
     $('chipMax').textContent = Number.isFinite(maxT) ? fmt(maxT, 1) + ' °C' : '—';
     return { cuenta, total: motores.length, maxT: Number.isFinite(maxT) ? maxT : null, maxNombre };
+  },
+};
+
+/* ---------- Gemelo digital: silueta del robot con cada articulación coloreada por su temperatura ---------- */
+const Gemelo = {
+  nodos: [],                 // un círculo por motor (en el mismo orden que la tabla)
+  pies: {},                  // un círculo por pie, por nombre de pata
+  nombres: [],
+
+  construir(motores) {
+    const cont = $('gemelo');
+    cont.replaceChildren();
+    this.nodos = [];
+    this.pies = {};
+    const total = motores.length;
+    const geo = disposicionGemelo(total);
+    const sinSilueta = (texto) => {
+      cont.appendChild(crear('p', 'vacio', texto));
+      $('gemeloEtiqueta').textContent = '';
+    };
+    if (!geo) { sinSilueta('No hay silueta para este modelo: se muestran la tabla y el mapa de calor.'); return; }
+
+    const NS = 'http://www.w3.org/2000/svg';
+    const el = (tag, atributos = {}, clase = '') => {
+      const nodo = document.createElementNS(NS, tag);
+      for (const [k, v] of Object.entries(atributos)) nodo.setAttribute(k, String(v));
+      if (clase) nodo.setAttribute('class', clase);
+      return nodo;
+    };
+    const svg = el('svg', { viewBox: '0 0 ' + geo.ancho + ' ' + geo.alto, 'aria-hidden': 'true' });
+
+    for (const d of geo.decoracion) {
+      if (d.tipo === 'rect') svg.appendChild(el('rect', { x: d.x, y: d.y, width: d.ancho, height: d.alto, rx: d.radio }, 'cuerpo-g'));
+      else if (d.tipo === 'poligono') svg.appendChild(el('polygon', { points: d.puntos }, 'cuerpo-g'));
+      else if (d.tipo === 'circulo') svg.appendChild(el('circle', { cx: d.cx, cy: d.cy, r: d.r }, 'cuerpo-g'));
+      else if (d.tipo === 'linea') svg.appendChild(el('line', { x1: d.x1, y1: d.y1, x2: d.x2, y2: d.y2 }, 'hueso'));
+    }
+    for (const h of geo.huesos) svg.appendChild(el('polyline', { points: h.map((p) => p.join(',')).join(' ') }, 'hueso'));
+    for (const [pata, p] of Object.entries(geo.pies)) {
+      const c = el('circle', { cx: p[0], cy: p[1], r: geo.radioArt + 4 }, 'pie-g');
+      svg.appendChild(c);
+      this.pies[pata] = c;
+    }
+    for (const e of geo.etiquetas) {
+      const t = el('text', { x: e.x, y: e.y }, 'etq-g');
+      t.textContent = e.texto;
+      svg.appendChild(t);
+    }
+
+    let colocados = 0;
+    motores.forEach((m, i) => {
+      const nombre = nombreDeMotor(m, total);
+      const pos = geo.articulaciones[nombre];
+      if (!pos) return;
+      const c = el('circle', { cx: pos[0], cy: pos[1], r: geo.radioArt, tabindex: 0, role: 'img' }, 'art sin-dato');
+      const titulo = el('title');
+      titulo.textContent = nombre;
+      c.appendChild(titulo);
+      c.addEventListener('mouseenter', () => { PanelMotores.resaltarFila(i, true); this.resaltar(i, true); });
+      c.addEventListener('mouseleave', () => { PanelMotores.resaltarFila(i, false); this.resaltar(i, false); });
+      c.addEventListener('focus', () => PanelMotores.resaltarFila(i, true));
+      c.addEventListener('blur', () => PanelMotores.resaltarFila(i, false));
+      c.addEventListener('click', () => PanelMotores.irAFila(i));
+      c.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); PanelMotores.irAFila(i); } });
+      svg.appendChild(c);
+      this.nodos[i] = c;
+      colocados++;
+    });
+    if (colocados < total * 0.6) { this.nodos = []; this.pies = {}; cont.replaceChildren(); sinSilueta('Los nombres de los motores no coinciden con ninguna silueta conocida.'); return; }
+    cont.appendChild(svg);
+    $('gemeloEtiqueta').textContent = geo.titulo;
+  },
+
+  /** Resalta (o no) una articulación; la llama la tabla al pasar el mouse por una fila. */
+  resaltar(i, encendida) {
+    if (this.nodos[i]) this.nodos[i].classList.toggle('resaltada', encendida);
+  },
+
+  actualizar(motores, fuerzas) {
+    motores.forEach((m, i) => {
+      const c = this.nodos[i];
+      if (!c) return;
+      const nivel = clasificarTemp(m.temperatura);
+      c.classList.remove('ok', 'warn', 'hot', 'sin-dato');
+      c.classList.add(nivel);
+      c.querySelector('title').textContent = nombreDeMotor(m, motores.length) + ' · ' + fmt(m.temperatura, 1) + ' °C · ángulo ' + fmt(m.angulo, 1) + '° · torque ' + fmt(m.torque, 2) + ' N·m';
+    });
+    for (const [pata, c] of Object.entries(this.pies)) c.classList.toggle('apoyado', Number((fuerzas || {})[pata]) === 1);
   },
 };
 
@@ -987,6 +1198,14 @@ function iniciarApp() {
     try { localStorage.setItem(clave, valor); } catch { /* modo privado: no pasa nada */ }
   }
 
+  /* ---------- latido: una onda en el indicador de conexión con cada mensaje que llega ---------- */
+  const ondaLatido = $('latido');
+  const sinMovimiento = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  function latido() {
+    if (sinMovimiento || !ondaLatido || !ondaLatido.animate) return;
+    ondaLatido.animate([{ opacity: .9, transform: 'scale(.6)' }, { opacity: 0, transform: 'scale(2)' }], { duration: 450, easing: 'ease-out' });
+  }
+
   /* ---------- estado de la conexión ---------- */
   const TEXTOS_ESTADO = { ws: 'En vivo · WebSocket', polling: 'En vivo · polling', conectando: 'Conectando…', caido: 'Sin conexión' };
   function mostrarEstado({ estado, detalle, intentos }) {
@@ -1005,6 +1224,7 @@ function iniciarApp() {
     modeloActual = data.modelo;
     cantMotores = data.motores.length;
     PanelMotores.construir(data.motores);
+    Gemelo.construir(data.motores);
     PanelTemp.construir(data.motores);
     PanelPatas.construir(Object.keys(data.fuerzas || {}));
     enAlerta.clear();
@@ -1032,6 +1252,8 @@ function iniciarApp() {
     ultimo = data;
     document.body.classList.add('con-datos');
     const resumenMotores = PanelMotores.actualizar(data.motores);
+    Gemelo.actualizar(data.motores, data.fuerzas);
+    latido();
     Resumen.actualizar(data, resumenMotores);
     PanelIMU.actualizar(data.imu, data.ts);
     PanelBMS.actualizar(data.bms);

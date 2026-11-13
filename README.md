@@ -24,7 +24,8 @@ El dashboard se conecta a un servidor de telemetría (el backend FastAPI que pro
 
 | Panel | Qué muestra |
 |---|---|
-| **Motores** | Una fila por motor (12 en el Go2, 29 en el G1): **temperatura con semáforo** (verde menos de 40 °C, amarillo de 40 a 60, rojo más de 60), ángulo en grados, velocidad angular en rad/s y torque estimado en N·m. La tabla se ordena por temperatura y hay una vista de **mapa de calor** agrupada por pata o articulación. |
+| **Gemelo digital** | Silueta del robot (vista superior del Go2, frontal del G1) con cada articulación coloreada según el semáforo de su motor. Los pies se iluminan al tocar el suelo. Al pasar el mouse por una articulación se resalta su fila en la tabla y al hacer clic se salta a ella. |
+| **Motores** | Una fila por motor (12 en el Go2, 29 en el G1): **temperatura con semáforo** (verde menos de 40 °C, amarillo de 40 a 60, rojo más de 60), minigráfico de **tendencia** de los últimos 60 datos, ángulo en grados, velocidad angular en rad/s y torque estimado en N·m. La tabla se ordena por temperatura y hay una vista de **mapa de calor** agrupada por pata o articulación. |
 | **IMU** | Inclinación del robot en grados (*roll*: giro lateral, *pitch*: cabeceo, *yaw*: rumbo) y aceleración en m/s². Incluye un horizonte artificial, una brújula y un gráfico histórico de las últimas 300 muestras. |
 | **Batería (BMS)** | Carga restante (%), corriente (mA), temperatura (°C) y voltaje de cada celda, con la celda más baja y la más alta resaltadas, y un gráfico histórico por celda. |
 | **Fuerzas por pata** | Si cada pata está apoyada en el suelo o en el aire (FR delantera derecha, FL delantera izquierda, RR trasera derecha, RL trasera izquierda). |
@@ -38,7 +39,8 @@ Además:
 - **Alertas automáticas:** si un motor supera 60 °C se avisa en pantalla y se registra una muestra sin tocar nada.
 - **Pérdida de conexión:** aviso rojo visible, los paneles se atenúan mostrando los últimos valores, y se reintenta solo. La página nunca se rompe.
 - **Go2 o G1:** la cantidad de motores y los nombres salen de los datos. Un selector permite pedir el robot (`go2` o `g1`).
-- **Tema claro y oscuro** y **pantalla completa**, pensados para proyectar en el laboratorio. Se adapta a tablet y celular.
+- **Identidad visual de «centro de mando»:** fondo de plano técnico, paneles numerados con esquinas marcadas, cifras en tipografía monoespaciada, batería segmentada y un pulso en el indicador de conexión que late con cada dato recibido (se desactiva si el sistema pide reducir animaciones).
+- **Tema oscuro («mando») y claro («plano»)** y **pantalla completa**, pensados para proyectar en el laboratorio. Se adapta a tablet y celular.
 - **Solo lectura:** el dashboard no envía ningún comando al robot.
 
 | Mapa de calor | Tema claro |
@@ -63,8 +65,8 @@ flowchart LR
         W["WebSocket /ws"]
     end
     subgraph Navegador["Dashboard (este repositorio)"]
-        T["Telemetria<br/>fuente de datos"]
-        P["Paneles"]
+        T["Telemetria<br/>fuente de datos (Subject)"]
+        P["Paneles<br/>(Observers)"]
         C["Captura y CSV"]
     end
     S --> A
@@ -76,11 +78,35 @@ flowchart LR
     C -->|"Blob, sin pasar por el servidor"| F[("Archivo CSV en tu computadora")]
 ```
 
+### Patrón Observer
+
+La pantalla y la fuente de datos están desacopladas con el patrón **Observer** (publicador y suscriptores):
+
+- **Subject (publicador):** la clase `Telemetria`. No sabe qué se dibuja; solo recibe mensajes, los valida y los publica.
+- **Eventos:** `dato` (llegó un mensaje válido) y `estado` (cambió la conexión: conectando, WebSocket, polling o caído).
+- **Suscripción:** `telemetria.en('dato', fn)` agrega un suscriptor; `_emitir(evento, arg)` los recorre y los avisa. Cada aviso va protegido con `try/catch`: si un suscriptor falla, el error se registra y los demás siguen recibiendo datos.
+- **Observers:** al recibir un `dato`, la aplicación actualiza `PanelMotores`, `Gemelo`, `PanelIMU`, `PanelBMS`, `PanelCeldas`, `PanelPatas`, `PanelTemp`, `Resumen` y las alertas; al recibir un `estado` actualiza el indicador y el aviso de conexión.
+
+```mermaid
+flowchart LR
+    WS["WebSocket"] --> T
+    PO["Polling"] --> T
+    T["Telemetria<br/>Subject"] -->|"evento dato"| M["PanelMotores"]
+    T -->|"evento dato"| G["Gemelo digital"]
+    T -->|"evento dato"| I["PanelIMU"]
+    T -->|"evento dato"| B["PanelBMS"]
+    T -->|"evento dato"| F["PanelPatas"]
+    T -->|"evento dato"| H["PanelTemp y Resumen"]
+    T -->|"evento estado"| E["Indicador y aviso de conexión"]
+```
+
+Qué se gana: el WebSocket y el polling son intercambiables sin tocar ningún panel, cada panel se agrega o se quita con una suscripción, y la capa de datos se prueba con Node sin navegador (`test_datos.js`).
+
 ### Los cinco bloques de `dashboard.js`
 
 1. **Configuración y lógica pura:** constantes, semáforo, buffer circular, validación de mensajes, armado del CSV. Son funciones sin acceso a la pantalla, por eso se pueden probar con Node.
-2. **`Telemetria` (acceso a datos):** obtiene los mensajes del servidor y avisa a quien se suscribió (patrón **Observer**). La pantalla no sabe si el dato llegó por WebSocket o por polling.
-3. **Paneles:** un objeto por panel (`PanelMotores`, `PanelIMU`, `PanelBMS`, `PanelCeldas`, `PanelPatas`, `PanelTemp`, `Resumen`), cada uno con `construir()` y `actualizar()`. Todo el texto se escribe con `textContent`: ningún dato del servidor se interpreta como HTML.
+2. **`Telemetria` (acceso a datos):** obtiene los mensajes del servidor y avisa a quien se suscribió (patrón **Observer**, ver arriba). La pantalla no sabe si el dato llegó por WebSocket o por polling.
+3. **Paneles:** un objeto por panel (`PanelMotores`, `Gemelo`, `PanelIMU`, `PanelBMS`, `PanelCeldas`, `PanelPatas`, `PanelTemp`, `Resumen`), cada uno con `construir()` y `actualizar()`. Todo el texto se escribe con `textContent`: ningún dato del servidor se interpreta como HTML.
 4. **Captura y exportación CSV.**
 5. **Aplicación:** conecta todo y atiende los botones y selectores.
 
@@ -230,8 +256,8 @@ Unidades: ángulo en grados, velocidad en rad/s, torque en N·m, temperatura en 
 
 ```
 TP-Telemetria/
-├── dashboard.html        Estructura de la página: paneles, controles e íconos
-├── dashboard.css         Estilos: tema oscuro y claro, diseño adaptable
+├── dashboard.html        Estructura de la página: paneles numerados, controles e íconos
+├── dashboard.css         Estilos: temas «mando» (oscuro) y «plano» (claro), diseño adaptable
 ├── dashboard.js          Toda la lógica (los cinco bloques descritos arriba)
 ├── pruebas/
 │   ├── test_logica.js    Pruebas de las funciones puras
@@ -246,14 +272,14 @@ TP-Telemetria/
 
 ## 6. Pruebas
 
-Son 20 pruebas, sin dependencias. Hace falta Node.js (probado con la versión 22):
+Son 28 pruebas, sin dependencias. Hace falta Node.js (probado con la versión 22):
 
 ```bash
 node pruebas/test_logica.js
 node pruebas/test_datos.js
 ```
 
-Cubren el semáforo, el buffer circular, el armado y el escape del CSV, las alertas con su histéresis, y la capa de datos contra un servidor falso: polling, robot elegido, error 409, caída del servidor y reconexión.
+Cubren el semáforo, la disposición del gemelo digital (cada articulación dentro del dibujo y sin superponerse, simetría izquierda-derecha), el cálculo de las tendencias, el buffer circular, el armado y el escape del CSV, las alertas con su histéresis, y la capa de datos contra un servidor falso: polling, robot elegido, error 409, caída del servidor y reconexión.
 
 ---
 
@@ -282,7 +308,7 @@ Cubren el semáforo, el buffer circular, el armado y el escape del CSV, las aler
 ## 9. Entregables
 
 - **Código:** `dashboard.html`, `dashboard.css` y `dashboard.js`.
-- **Capturas de pantalla** en [`entregables/capturas/`](entregables/capturas/): dashboard completo con los cuatro paneles y el semáforo, tema claro, mapa de calor, captura y exportación, semáforo en rojo (con `?forzarTemp=25`, temperaturas simuladas y avisado en la propia captura), G1 con 29 motores y pérdida de conexión.
+- **Capturas de pantalla** en [`entregables/capturas/`](entregables/capturas/): dashboard completo con el gemelo digital, los cuatro paneles y el semáforo, tema claro, mapa de calor, captura y exportación, semáforo en rojo (con `?forzarTemp=25`, temperaturas simuladas y avisado en la propia captura), G1 con 29 motores y pérdida de conexión.
 - **CSV exportado** en [`entregables/csv/`](entregables/csv/): sesión de prueba con 12 muestras capturadas manualmente con el botón.
 - **Documento técnico:** pendiente.
 
