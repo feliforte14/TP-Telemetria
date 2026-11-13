@@ -38,6 +38,39 @@ const CONFIG = Object.freeze({
   VENTANA_STATS_MS: 5000,       // ventana para mensajes por segundo y tráfico
 });
 
+const ETIQUETAS_TEMP = Object.freeze({
+  'ok': 'Normal',
+  'warn': 'Precaución',
+  'hot': 'Sobrecalentado',
+  'sin-dato': 'Sin dato',
+});
+
+/** Semáforo de temperatura. Mismos umbrales que electroSim. */
+function clasificarTemp(t) {
+  if (typeof t !== 'number' || !Number.isFinite(t)) return 'sin-dato';
+  if (t < CONFIG.UMBRAL_VERDE) return 'ok';
+  if (t <= CONFIG.UMBRAL_ROJO) return 'warn';
+  return 'hot';
+}
+
+/* Nombres de los motores por modelo. Los usa solo si el servidor no manda `nombre`. */
+const NOMBRES_POR_DEFECTO = Object.freeze({
+  12: ['FR_hip', 'FR_thigh', 'FR_calf', 'FL_hip', 'FL_thigh', 'FL_calf', 'RR_hip', 'RR_thigh', 'RR_calf', 'RL_hip', 'RL_thigh', 'RL_calf'],
+  29: ['L_hip_yaw', 'L_hip_roll', 'L_hip_pitch', 'L_knee', 'L_ankle_pitch', 'L_ankle_roll',
+       'R_hip_yaw', 'R_hip_roll', 'R_hip_pitch', 'R_knee', 'R_ankle_pitch', 'R_ankle_roll',
+       'torso_yaw', 'torso_roll', 'torso_pitch',
+       'L_shoulder_pitch', 'L_shoulder_roll', 'L_shoulder_yaw', 'L_elbow', 'L_wrist_roll', 'L_wrist_pitch', 'L_wrist_yaw',
+       'R_shoulder_pitch', 'R_shoulder_roll', 'R_shoulder_yaw', 'R_elbow', 'R_wrist_roll', 'R_wrist_pitch', 'R_wrist_yaw'],
+});
+
+/** Nombre de un motor: el que manda el servidor; si no, el estándar del modelo (12 = Go2, 29 = G1); si no, "Motor N". */
+function nombreDeMotor(motor, total) {
+  if (motor && typeof motor.nombre === 'string' && motor.nombre) return motor.nombre;
+  const porDefecto = NOMBRES_POR_DEFECTO[total];
+  const id = motor ? motor.id : undefined;
+  return (porDefecto && porDefecto[id]) || ('Motor ' + id);
+}
+
 /** Formatea un número para mostrarlo; '—' si no es un número válido. */
 function fmt(n, decimales = 1) {
   return (typeof n === 'number' && Number.isFinite(n)) ? n.toFixed(decimales) : '—';
@@ -290,7 +323,7 @@ class Telemetria {
 /* Exportación para las pruebas con Node (en el navegador no existe `module`). */
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
-    CONFIG, fmt, validarTelemetria, normalizarBase, wsUrl, Telemetria,
+    CONFIG, clasificarTemp, fmt, validarTelemetria, normalizarBase, wsUrl, Telemetria, nombreDeMotor,
   };
 }
 
@@ -309,6 +342,54 @@ function crear(tag, clase, texto) {
   if (texto !== undefined) el.textContent = texto;
   return el;
 }
+
+/* ---------- Panel de motores ---------- */
+const PanelMotores = {
+  filas: [],
+  construir(motores) {
+    const tbody = document.querySelector('#tablaMotores tbody');
+    tbody.replaceChildren();
+    this.filas = motores.map((m) => {
+      const tr = crear('tr');
+      const pastilla = crear('span', 'pill-temp', '—');
+      const temp = crear('td', 'temp sin-dato');
+      temp.appendChild(pastilla);
+      const celdas = {
+        nombre: crear('td', '', nombreDeMotor(m, motores.length)),
+        temp,
+        tempTexto: pastilla,
+        estado: crear('td', 'estado', '—'),
+        angulo: crear('td', '', '—'),
+        velocidad: crear('td', '', '—'),
+        torque: crear('td', '', '—'),
+      };
+      for (const k of ['nombre', 'temp', 'estado', 'angulo', 'velocidad', 'torque']) tr.appendChild(celdas[k]);
+      tbody.appendChild(tr);
+      return celdas;
+    });
+  },
+  actualizar(motores) {
+    const cuenta = { 'ok': 0, 'warn': 0, 'hot': 0 };
+    let maxT = -Infinity;
+    motores.forEach((m, i) => {
+      const f = this.filas[i];
+      if (!f) return;
+      const nivel = clasificarTemp(m.temperatura);
+      f.temp.className = 'temp ' + nivel;
+      f.tempTexto.textContent = fmt(m.temperatura, 1) + ' °C';
+      f.estado.textContent = ETIQUETAS_TEMP[nivel];
+      f.angulo.textContent = fmt(m.angulo, 2);
+      f.velocidad.textContent = fmt(m.velocidad, 3);
+      f.torque.textContent = fmt(m.torque, 2);
+      if (nivel in cuenta) cuenta[nivel]++;
+      if (typeof m.temperatura === 'number' && m.temperatura > maxT) maxT = m.temperatura;
+    });
+    $('chipOk').textContent = cuenta.ok;
+    $('chipWarn').textContent = cuenta.warn;
+    $('chipHot').textContent = cuenta.hot;
+    $('chipMax').textContent = Number.isFinite(maxT) ? fmt(maxT, 1) + ' °C' : '—';
+  },
+};
 
 /* ============================================================================
  * 5. APLICACIÓN
@@ -353,6 +434,7 @@ function iniciarApp() {
   function prepararModelo(data) {
     modeloActual = data.modelo;
     cantMotores = data.motores.length;
+    PanelMotores.construir(data.motores);
     $('nombreRobot').textContent = 'Unitree ' + String(data.modelo || '').toUpperCase() + ' · ' + cantMotores + ' motores';
     fetch(telemetria.base + '/info', { cache: 'no-store' })
       .then((r) => (r.ok ? r.json() : null))
@@ -375,6 +457,7 @@ function iniciarApp() {
     const data = aplicarAjusteDePrueba(crudo);
     if (data.modelo !== modeloActual || data.motores.length !== cantMotores) prepararModelo(data);
     ultimo = data;
+    PanelMotores.actualizar(data.motores);
 
   });
 
