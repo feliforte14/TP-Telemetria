@@ -1,0 +1,67 @@
+<!doctype html><html lang="es"><head><meta charset="utf-8"><title>Guía del sistema</title><link rel="stylesheet" href="estilo.css"></head><body>
+<h1>Guía del sistema · Qué hace, qué usa y cómo funciona</h1>
+<div class="sub">Dashboard de telemetría del robot Unitree Go2 · TP05 Desarrollo de Aplicaciones II · UADE</div>
+
+<h2>1. Qué hace el sistema</h2>
+<p>Es una página web que muestra <b>en tiempo real</b> el estado de un robot cuadrúpedo Unitree Go2 y permite guardar muestras y exportarlas a un archivo CSV. Funciona como un tablero de control (dashboard) de solo lectura: observa el robot pero nunca le manda órdenes.</p>
+<table>
+<tr><th style="width:24%">Panel</th><th>Qué muestra y para qué sirve</th></tr>
+<tr><td><b>Motores</b></td><td>12 motores (3 por pata: cadera, muslo y pantorrilla). Temperatura con semáforo (verde menos de 40 °C, amarillo de 40 a 60, rojo más de 60), ángulo, velocidad y torque. Sirve para detectar un motor que se sobrecalienta antes de que se dañe.</td></tr>
+<tr><td><b>IMU</b></td><td>La unidad de medición inercial dice cómo está inclinado el robot: <i>roll</i> (giro lateral), <i>pitch</i> (cabeceo) y <i>yaw</i> (rumbo), más la aceleración. Se ve con un horizonte artificial, una brújula y un gráfico de las últimas 300 muestras.</td></tr>
+<tr><td><b>Batería (BMS)</b></td><td>El sistema de gestión de batería informa la carga (%), la corriente (mA), la temperatura y el voltaje de cada celda. Una diferencia grande entre celdas indica que están desbalanceadas.</td></tr>
+<tr><td><b>Fuerzas por pata</b></td><td>Indica qué patas están apoyadas en el suelo y cuáles en el aire (FR, FL, RR, RL). Permite seguir la marcha.</td></tr>
+<tr><td><b>Gemelo digital</b></td><td>Dibujo del robot cuyas patas se mueven con los ángulos reales de los motores y cuyas articulaciones se pintan según su temperatura: se ve de un vistazo cómo camina y dónde está el problema.</td></tr>
+<tr><td><b>Conexión</b></td><td>Fuente de datos en uso, mensajes por segundo, tráfico y cuánto hace que llegó el último dato.</td></tr>
+<tr><td><b>Captura y CSV</b></td><td>«Capturar muestra» guarda una foto de todos los valores; «Exportar CSV» descarga todas las muestras en un archivo que se abre en Excel.</td></tr>
+</table>
+<p>Si se corta la conexión, aparece un aviso rojo, los paneles quedan atenuados con los últimos valores y el sistema reintenta solo. Si algún motor supera 60 °C, avisa y guarda una muestra automáticamente.</p>
+
+<h2>2. Qué tecnologías usa</h2>
+<table>
+<tr><th style="width:24%">Tecnología</th><th>Para qué se usa</th></tr>
+<tr><td><b>HTML</b></td><td>Estructura de la página: paneles, tablas y botones.</td></tr>
+<tr><td><b>CSS</b></td><td>Aspecto: colores, grilla, tema oscuro y claro, adaptación a celular.</td></tr>
+<tr><td><b>JavaScript</b> (sin framework)</td><td>Toda la lógica: conectarse, recibir datos, actualizar paneles, armar el CSV. Se usa «JavaScript puro» para que no haya nada que instalar.</td></tr>
+<tr><td><b>Chart.js</b></td><td>Librería de gráficos (se carga desde internet por CDN) para las curvas de IMU, temperatura y celdas.</td></tr>
+<tr><td><b>FastAPI</b> (Python)</td><td>Es el <i>servidor</i> que provee la cátedra: lee el robot o su simulador y publica los datos. No es parte de este trabajo, pero el dashboard depende de él.</td></tr>
+<tr><td><b>Node.js</b></td><td>Solo para ejecutar las 34 pruebas automáticas; no se necesita para usar el dashboard.</td></tr>
+<tr><td><b>Git y GitHub</b></td><td>Control de versiones: historial de cambios y publicación del código.</td></tr>
+</table>
+
+<h2>3. Los conceptos que aparecen</h2>
+<h3>Cliente-servidor</h3>
+<p>Es un modelo donde dos programas se reparten el trabajo. El <b>servidor</b> tiene los datos (aquí, el estado del robot) y espera pedidos; el <b>cliente</b> los solicita y los presenta. En este sistema el servidor es el backend FastAPI y el cliente es el dashboard que corre en el navegador. Son independientes: se podría reemplazar uno sin tocar el otro, mientras se respete el contrato (la API).</p>
+<h3>API, HTTP y JSON</h3>
+<p>La <b>API</b> es la lista de «direcciones» que el servidor ofrece, por ejemplo <code>/telemetria</code>. <b>HTTP</b> es el protocolo con el que se piden (el mismo de cualquier página web) y <b>JSON</b> es el formato de texto en que viene la respuesta, con la forma <code>{"motores": [...], "imu": {...}, "bms": {...}, "fuerzas": {...}}</code>. El dashboard valida cada respuesta contra esa forma y descarta lo que no la cumple.</p>
+<h3>Polling (sondeo)</h3>
+<p>El cliente <b>pregunta</b> una y otra vez: «¿qué hay de nuevo?». Aquí, un <code>GET /telemetria</code> cada 250 ms. Es como refrescar una página muy rápido. Ventajas: es simple y funciona en cualquier red. Desventajas: cada dato exige un pedido completo, y siempre puede llegar un poco atrasado (hasta un intervalo).</p>
+<h3>WebSocket (push)</h3>
+<p>El cliente abre <b>una conexión que queda abierta</b> y el servidor <b>empuja</b> los datos apenas los tiene, unos 10 por segundo. Es como una llamada telefónica en lugar de mandar cartas. Ventajas: datos más frescos y sin repetir encabezados. Desventajas: hay que manejar la reconexión si se corta, y esta versión del servidor no admite parámetros.</p>
+<h3>Modo automático</h3>
+<p>El dashboard usa WebSocket y, si falla, cae a polling mientras reintenta el WebSocket cada vez con más espera (de 1 a 10 s). Cuando se recupera, vuelve solo. Así el usuario ve datos aunque el WebSocket no esté disponible.</p>
+<h3>Patrón Observer</h3>
+<p>Un <b>patrón de diseño</b> es una solución probada a un problema típico. En Observer hay un <b>publicador</b> (<i>Subject</i>) que avisa a sus <b>suscriptores</b> (<i>Observers</i>) cuando algo cambia. Aquí el publicador es la clase <code>Telemetria</code>, que anuncia «llegó un dato» o «cambió la conexión», y cada panel (motores, IMU, batería…) se suscribe y se actualiza solo. Ningún panel sabe de dónde vienen los datos, por eso WebSocket y polling se pueden intercambiar sin tocarlos.</p>
+<h3>Buffer circular</h3>
+<p>Una lista de tamaño fijo (300 muestras) en la que, al llenarse, entra la nueva y sale la más antigua. Evita que la memoria crezca sin límite al dejar el dashboard horas abierto y mantiene el gráfico fluido.</p>
+<h3>Histéresis</h3>
+<p>Para que una alerta no se dispare y apague sin parar cuando un motor oscila alrededor de 60 °C, se activa al superar 60 °C pero se rearma recién al bajar de 58 °C.</p>
+<h3>Blob y exportación sin servidor</h3>
+<p>Un <b>Blob</b> es un archivo en memoria del navegador. El CSV se arma con los datos ya capturados y se descarga directamente, sin enviar nada al servidor.</p>
+<h3>CORS</h3>
+<p>Regla de seguridad del navegador que limita a qué servidores puede pedir datos una página. El servidor de la cátedra la tiene abierta para facilitar el trabajo en el laboratorio; por eso debe usarse solo en una red cerrada.</p>
+
+<h2>4. Cómo se conecta todo (resumen del recorrido de un dato)</h2>
+<ol>
+<li>El robot (o su simulador) genera el estado de motores, IMU, batería y patas.</li>
+<li>El servidor FastAPI lo publica por <code>GET /telemetria</code> y por <code>WS /ws</code>.</li>
+<li>La clase <code>Telemetria</code> del dashboard lo recibe (por push o por polling), lo valida y lo publica como evento <code>dato</code>.</li>
+<li>Cada panel suscripto actualiza su parte de la pantalla; los gráficos agregan el punto al buffer circular.</li>
+<li>Si el usuario pulsa «Capturar muestra», el estado actual se guarda en una lista; «Exportar CSV» convierte la lista en un archivo y lo descarga.</li>
+</ol>
+<h2>5. Cómo se usa</h2>
+<ul>
+<li>Levantar el servidor: <code>python arrancar_api.py --demo --robot go2</code> (necesita Python 3.11 o superior con <code>fastapi uvicorn websockets</code>).</li>
+<li>Abrir <code>dashboard.html</code> en el navegador (se detecta el servidor en <code>localhost:8001</code>), o escribir otra dirección en el campo «Servidor».</li>
+<li>Para ver el semáforo en rojo con el simulador: agregar <code>?forzarTemp=25</code> a la dirección de la página.</li>
+</ul>
+</body></html>

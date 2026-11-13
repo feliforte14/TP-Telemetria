@@ -67,6 +67,36 @@ function nombreDeMotor(motor, total) {
   return (porDefecto && porDefecto[id]) || ('Motor ' + id);
 }
 
+/** Escala del mapa de calor: de 20 a 70 °C. Los cortes del semáforo (40 y 60 °C) caen al 40 % y al 80 %. */
+const ESCALA_CALOR = Object.freeze({ MIN: 20, MAX: 70 });
+
+/** Posición (0 a 1) de una temperatura en la escala del mapa de calor; `null` si no hay dato. */
+function fraccionCalor(t) {
+  if (typeof t !== 'number' || !Number.isFinite(t)) return null;
+  return Math.min(1, Math.max(0, (t - ESCALA_CALOR.MIN) / (ESCALA_CALOR.MAX - ESCALA_CALOR.MIN)));
+}
+
+/**
+ * Color continuo de una temperatura: verdes por debajo de 40 °C, de amarillo a naranja entre 40 y 60 °C y rojo por encima.
+ * Respeta los cortes del semáforo (el color salta al cruzarlos) y cambia de tono dentro de cada tramo.
+ */
+function colorCalor(t) {
+  if (typeof t !== 'number' || !Number.isFinite(t)) return null;
+  let tono;
+  if (t < CONFIG.UMBRAL_VERDE) tono = 140 - ((Math.max(t, ESCALA_CALOR.MIN) - ESCALA_CALOR.MIN) / (CONFIG.UMBRAL_VERDE - ESCALA_CALOR.MIN)) * 30;
+  else if (t <= CONFIG.UMBRAL_ROJO) tono = 48 - ((t - CONFIG.UMBRAL_VERDE) / (CONFIG.UMBRAL_ROJO - CONFIG.UMBRAL_VERDE)) * 30;
+  else tono = 2;
+  return 'hsl(' + Math.round(tono) + ' 78% 48%)';
+}
+
+/** Tendencia de una serie: 'sube', 'baja' o 'estable' según cuánto cambió entre el primer y el último valor (umbral en °C). */
+function tendenciaDe(valores, umbral = 1) {
+  const v = (valores || []).filter((x) => typeof x === 'number' && Number.isFinite(x));
+  if (v.length < 2) return 'estable';
+  const d = v[v.length - 1] - v[0];
+  return d >= umbral ? 'sube' : d <= -umbral ? 'baja' : 'estable';
+}
+
 /** Descripción de cada pata del cuadrúpedo, tal como la define el enunciado. */
 const DESCRIPCION_PATAS = Object.freeze({ FR: 'delantera derecha', FL: 'delantera izquierda', RR: 'trasera derecha', RL: 'trasera izquierda' });
 
@@ -138,6 +168,7 @@ function disposicionGemelo(total) {
     const articulaciones = {};
     const huesos = [];
     const pies = {};
+    const patas = {};
     const etiquetas = [{ texto: '▲ FRENTE', x: 160, y: 60 }];
     for (const [pata, [h, v]] of Object.entries({ FR: [false, false], FL: [true, false], RR: [false, true], RL: [true, true] })) {
       const p = (xy) => [h ? 320 - xy[0] : xy[0], v ? 360 - xy[1] : xy[1]];
@@ -146,16 +177,43 @@ function disposicionGemelo(total) {
       articulaciones[pata + '_calf'] = p(FR.calf);
       pies[pata] = p(FR.pie);
       huesos.push([p(FR.hip), p(FR.thigh), p(FR.calf), p(FR.pie)]);
-      const e = p([303, FR.pie[1] + 4]);
+      // Reposo de la pata y su signo: al espejar una pata, los giros cambian de sentido.
+      patas[pata] = { reposo: { hip: p(FR.hip), thigh: p(FR.thigh), calf: p(FR.calf), pie: p(FR.pie) }, signo: (h ? -1 : 1) * (v ? -1 : 1), hueso: huesos.length - 1 };
+      const e = p([303, 12]);  // la etiqueta queda en la esquina, lejos del pie aunque la pata se mueva
       etiquetas.push({ texto: pata, x: e[0], y: e[1] });
     }
     return {
       tipo: 'cuadrupedo', titulo: 'Cuadrúpedo · vista superior', ancho: 320, alto: 360, radioArt: 9,
       decoracion: [{ tipo: 'rect', x: 120, y: 78, ancho: 80, alto: 204, radio: 26 }],
-      huesos, articulaciones, pies, etiquetas,
+      huesos, articulaciones, pies, etiquetas, patas,
     };
   }
   return null;
+}
+
+/**
+ * Pose de una pata a partir de los ángulos de sus tres motores (grados). Es una aproximación visual de la vista
+ * superior: la cadera abre o cierra la pata, y el muslo y la pantorrilla la adelantan o la atrasan. Los giros
+ * se acumulan a lo largo de la cadena y la longitud de cada hueso se conserva.
+ * `reposo` = {hip, thigh, calf, pie}; `signo` = ±1 según el lado de la pata.
+ */
+/** ¿El sistema pidió reducir las animaciones? */
+function movimientoReducido() { return typeof window !== 'undefined' && !!window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches; }
+
+const GANANCIA_POSE = Object.freeze({ hip: 0.3, thigh: 0.55, calf: 0.3 });
+function posePata(reposo, signo, ang) {
+  const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+  const rad = (g) => (g * Math.PI) / 180;
+  const giro = (v, g) => { const c = Math.cos(g), s = Math.sin(g); return [v[0] * c - v[1] * s, v[0] * s + v[1] * c]; };
+  const resta = (a, b) => [a[0] - b[0], a[1] - b[1]];
+  const suma = (a, b) => [a[0] + b[0], a[1] + b[1]];
+  let acum = rad(signo * GANANCIA_POSE.hip * num(ang.hip));
+  const thigh = suma(reposo.hip, giro(resta(reposo.thigh, reposo.hip), acum));
+  acum += rad(signo * GANANCIA_POSE.thigh * num(ang.thigh));
+  const calf = suma(thigh, giro(resta(reposo.calf, reposo.thigh), acum));
+  acum += rad(signo * GANANCIA_POSE.calf * num(ang.calf));
+  const pie = suma(calf, giro(resta(reposo.pie, reposo.calf), acum));
+  return { hip: reposo.hip, thigh, calf, pie };
 }
 
 /**
@@ -488,7 +546,7 @@ if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     CONFIG, clasificarTemp, fmt, RingBuffer, validarTelemetria, normalizarBase, wsUrl,
     aplanarMuestra, escaparCSV, construirCSV, estadisticaCeldas, motoresNuevosEnAlerta, Telemetria,
-    nombreDeMotor, limitarPorcentaje, colorBateria, disposicionGemelo, puntosTendencia,
+    nombreDeMotor, limitarPorcentaje, colorBateria, disposicionGemelo, posePata, puntosTendencia, fraccionCalor, colorCalor, tendenciaDe, ESCALA_CALOR,
   };
 }
 
@@ -616,11 +674,12 @@ const PanelMotores = {
     this._construirMapa(motores);
   },
 
-  /** Agrupa los motores por el prefijo del nombre (FR_hip -> grupo FR).  */
+  /** Mapa de calor: una tarjeta por pata (o grupo de articulaciones), ubicadas como en el robot cuando son las cuatro patas. */
   _construirMapa(motores) {
     const cont = $('mapaMotores');
     cont.replaceChildren();
     this.mosaicos = [];
+    this.grupos = {};
     const grupos = new Map();
     motores.forEach((m, i) => {
       const nombre = nombreDeMotor(m, motores.length);
@@ -630,20 +689,60 @@ const PanelMotores = {
       if (!grupos.has(grupo)) grupos.set(grupo, []);
       grupos.get(grupo).push({ i, corto });
     });
-    for (const [grupo, items] of grupos) {
-      const fila = crear('div', 'mapa-grupo');
-      fila.appendChild(crear('b', '', grupo));
-      const mosaicos = crear('div', 'mapa-fila');
-      for (const { i, corto } of items) {
+    // Con las cuatro patas del cuadrúpedo, se ubican como se ve el robot desde arriba: delanteras arriba, traseras abajo.
+    let orden = [...grupos.keys()];
+    const vista = ['FL', 'FR', 'RL', 'RR'];
+    if (vista.every((g) => grupos.has(g)) && orden.length === 4) orden = vista;
+    const grilla = crear('div', 'mapa-grilla' + (orden === vista ? ' cuatro-patas' : ''));
+    for (const grupo of orden) {
+      const tarjeta = crear('section', 'mapa-grupo');
+      const cab = crear('header', 'mapa-cab');
+      cab.appendChild(crear('b', '', grupo));
+      const maxEl = crear('span', 'mapa-max', '—');
+      cab.appendChild(maxEl);
+      tarjeta.appendChild(cab);
+      const fila = crear('div', 'mapa-fila');
+      for (const { i, corto } of grupos.get(grupo)) {
         const t = crear('div', 'mosaico');
+        t.tabIndex = 0;
         t.appendChild(crear('small', '', corto));
-        t.appendChild(crear('b', '', '—'));
-        mosaicos.appendChild(t);
-        this.mosaicos[i] = t;
+        const val = crear('b', '', '—');
+        t.appendChild(val);
+        const barra = crear('i', 'mosaico-barra');
+        const relleno = crear('i', '');
+        barra.appendChild(relleno);
+        t.appendChild(barra);
+        const tend = crear('span', 'mosaico-tend', '');
+        t.appendChild(tend);
+        t.addEventListener('mouseenter', () => Gemelo.resaltar(i, true));
+        t.addEventListener('mouseleave', () => Gemelo.resaltar(i, false));
+        t.addEventListener('click', () => this.irAFila(i));
+        t.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); this.irAFila(i); } });
+        fila.appendChild(t);
+        this.mosaicos[i] = { el: t, val, relleno, tend };
       }
-      fila.appendChild(mosaicos);
-      cont.appendChild(fila);
+      tarjeta.appendChild(fila);
+      grilla.appendChild(tarjeta);
+      this.grupos[grupo] = { max: maxEl, indices: grupos.get(grupo).map((x) => x.i), tarjeta };
     }
+    cont.appendChild(grilla);
+    // Escala de colores con los cortes del semáforo
+    const escala = crear('div', 'escala-calor');
+    const barraEsc = crear('i', 'escala-barra');
+    const marca = crear('i', 'escala-marca');
+    barraEsc.appendChild(marca);
+    escala.appendChild(barraEsc);
+    const etiquetas = crear('div', 'escala-etq');
+    for (const [t, texto] of [[ESCALA_CALOR.MIN, '≤ 20 °C'], [CONFIG.UMBRAL_VERDE, '40 °C'], [CONFIG.UMBRAL_ROJO, '60 °C'], [ESCALA_CALOR.MAX, '≥ 70 °C']]) {
+      const e = crear('span', '', texto);
+      e.style.left = (fraccionCalor(t) * 100) + '%';
+      etiquetas.appendChild(e);
+    }
+    escala.appendChild(etiquetas);
+    const resumen = crear('p', 'escala-resumen', '');
+    escala.appendChild(resumen);
+    cont.appendChild(escala);
+    this.escala = { marca, resumen };
   },
 
   /** Resalta (o no) la fila de un motor en la tabla. */
@@ -711,13 +810,34 @@ const PanelMotores = {
       }
       const mosaico = this.mosaicos[i];
       if (mosaico) {
-        mosaico.className = 'mosaico ' + nivel;
-        mosaico.lastChild.textContent = fmt(m.temperatura, 1) + '°';
-        mosaico.title = nombreDeMotor(m, motores.length) + ' · ' + texto + ' · ángulo ' + fmt(m.angulo, 1) + '° · torque ' + fmt(m.torque, 2) + ' N·m';
+        const color = colorCalor(m.temperatura);
+        mosaico.el.className = 'mosaico ' + nivel;
+        mosaico.el.style.setProperty('--calor', color || 'var(--sin-dato)');
+        mosaico.val.textContent = fmt(m.temperatura, 1) + '°';
+        const fr = fraccionCalor(m.temperatura);
+        mosaico.relleno.style.width = (fr === null ? 0 : Math.max(4, fr * 100)) + '%';
+        const tend = tendenciaDe(this.historial[i] ? this.historial[i].items.slice(-20) : []);
+        mosaico.tend.textContent = tend === 'sube' ? '▲' : tend === 'baja' ? '▼' : '';
+        mosaico.tend.title = tend === 'sube' ? 'Subiendo' : tend === 'baja' ? 'Bajando' : '';
+        mosaico.el.title = nombreDeMotor(m, motores.length) + ' · ' + texto + ' · ángulo ' + fmt(m.angulo, 1) + '° · torque ' + fmt(m.torque, 2) + ' N·m';
       }
       if (nivel in cuenta) cuenta[nivel]++;
       if (typeof m.temperatura === 'number' && m.temperatura > maxT) { maxT = m.temperatura; maxNombre = nombreDeMotor(m, motores.length); }
     });
+    for (const g of Object.values(this.grupos || {})) {
+      const t = g.indices.map((i) => motores[i] && motores[i].temperatura).filter((x) => typeof x === 'number' && Number.isFinite(x));
+      const mx = t.length ? Math.max(...t) : null;
+      g.max.textContent = mx === null ? '—' : 'máx ' + fmt(mx, 1) + ' °C';
+      g.tarjeta.className = 'mapa-grupo ' + clasificarTemp(mx);
+    }
+    if (this.escala) {
+      const todas = motores.map((m) => m.temperatura).filter((x) => typeof x === 'number' && Number.isFinite(x));
+      if (todas.length) {
+        const prom = todas.reduce((a, b) => a + b, 0) / todas.length;
+        this.escala.marca.style.left = (fraccionCalor(prom) * 100) + '%';
+        this.escala.resumen.textContent = 'Promedio ' + fmt(prom, 1) + ' °C · más frío ' + fmt(Math.min(...todas), 1) + ' °C · más caliente ' + fmt(Math.max(...todas), 1) + ' °C · diferencia ' + fmt(Math.max(...todas) - Math.min(...todas), 1) + ' °C';
+      }
+    }
     this._ordenar();
     $('chipOk').textContent = cuenta.ok;
     $('chipWarn').textContent = cuenta.warn;
@@ -732,12 +852,27 @@ const Gemelo = {
   nodos: [],                 // un círculo por motor (en el mismo orden que la tabla)
   pies: {},                  // un círculo por pie, por nombre de pata
   nombres: [],
+  geo: null,
+  huesos: {},                // tres segmentos (hueso) por pata
+  halos: [],                 // aro de aviso de cada articulación
+  ondas: {},                 // onda de contacto de cada pie
+  rol: [],                   // por motor: { pata, parte }
+  actual: {},                // pose dibujada de cada pata (se acerca a la pose objetivo en cada cuadro)
+  objetivo: {},              // pose pedida por el último dato
+  animando: false,
 
   construir(motores) {
     const cont = $('gemelo');
     cont.replaceChildren();
     this.nodos = [];
     this.pies = {};
+    this.huesos = {};
+    this.halos = [];
+    this.ondas = {};
+    this.rol = [];
+    this.actual = {};
+    this.objetivo = {};
+    this.geo = null;
     const total = motores.length;
     const geo = disposicionGemelo(total);
     const sinSilueta = (texto) => {
@@ -755,14 +890,55 @@ const Gemelo = {
     };
     const svg = el('svg', { viewBox: '0 0 ' + geo.ancho + ' ' + geo.alto, 'aria-hidden': 'true' });
 
+    // Fondo tipo radar: anillos concéntricos y cruz central
+    const cx = geo.ancho / 2, cy = geo.alto / 2;
+    const defs = el('defs');
+    const grad = el('radialGradient', { id: 'gradCuerpo', cx: '50%', cy: '35%', r: '75%' });
+    grad.appendChild(el('stop', { offset: '0%', 'stop-color': 'var(--acento)', 'stop-opacity': '0.28' }));
+    grad.appendChild(el('stop', { offset: '100%', 'stop-color': 'var(--acento)', 'stop-opacity': '0.04' }));
+    defs.appendChild(grad);
+    svg.appendChild(defs);
+    for (const rad of [70, 125, 178]) svg.appendChild(el('circle', { cx, cy, r: rad }, 'rejilla-g'));
+    svg.appendChild(el('line', { x1: cx, y1: 6, x2: cx, y2: geo.alto - 6 }, 'rejilla-g'));
+    svg.appendChild(el('line', { x1: 6, y1: cy, x2: geo.ancho - 6, y2: cy }, 'rejilla-g'));
+    for (let a = 0; a < 360; a += 30) {
+      const t = (a * Math.PI) / 180;
+      svg.appendChild(el('line', { x1: cx + Math.sin(t) * 172, y1: cy - Math.cos(t) * 172, x2: cx + Math.sin(t) * 184, y2: cy - Math.cos(t) * 184 }, 'marca-g'));
+    }
+
     for (const d of geo.decoracion) {
-      if (d.tipo === 'rect') svg.appendChild(el('rect', { x: d.x, y: d.y, width: d.ancho, height: d.alto, rx: d.radio }, 'cuerpo-g'));
+      if (d.tipo === 'rect') {
+        svg.appendChild(el('rect', { x: d.x, y: d.y, width: d.ancho, height: d.alto, rx: d.radio }, 'cuerpo-g'));
+        // Detalles del chasis: sensor frontal, columna central y módulos
+        const mx = d.x + d.ancho / 2;
+        svg.appendChild(el('rect', { x: mx - 20, y: d.y + 12, width: 40, height: 12, rx: 6 }, 'sensor-g'));
+        svg.appendChild(el('line', { x1: mx, y1: d.y + 34, x2: mx, y2: d.y + d.alto - 18 }, 'columna-g'));
+        for (let k = 0; k < 4; k++) svg.appendChild(el('rect', { x: mx - 16, y: d.y + 46 + k * 36, width: 32, height: 22, rx: 4 }, 'modulo-g'));
+      }
       else if (d.tipo === 'poligono') svg.appendChild(el('polygon', { points: d.puntos }, 'cuerpo-g'));
       else if (d.tipo === 'circulo') svg.appendChild(el('circle', { cx: d.cx, cy: d.cy, r: d.r }, 'cuerpo-g'));
       else if (d.tipo === 'linea') svg.appendChild(el('line', { x1: d.x1, y1: d.y1, x2: d.x2, y2: d.y2 }, 'hueso'));
     }
-    for (const h of geo.huesos) svg.appendChild(el('polyline', { points: h.map((p) => p.join(',')).join(' ') }, 'hueso'));
+    const anchos = [10, 8, 6];
+    geo.huesos.forEach((h, k) => {
+      const segs = [];
+      for (let q = 0; q < 3; q++) {
+        const sombra = el('line', { x1: h[q][0], y1: h[q][1], x2: h[q + 1][0], y2: h[q + 1][1], 'stroke-width': anchos[q] + 5 }, 'hueso-sombra');
+        svg.appendChild(sombra);
+        segs.push(sombra);
+      }
+      const visibles = [];
+      for (let q = 0; q < 3; q++) {
+        const seg = el('line', { x1: h[q][0], y1: h[q][1], x2: h[q + 1][0], y2: h[q + 1][1], 'stroke-width': anchos[q] }, 'hueso');
+        svg.appendChild(seg);
+        visibles.push(seg);
+      }
+      for (const [pata, d] of Object.entries(geo.patas || {})) if (d.hueso === k) this.huesos[pata] = { sombras: segs, segs: visibles };
+    });
     for (const [pata, p] of Object.entries(geo.pies)) {
+      const onda = el('circle', { cx: p[0], cy: p[1], r: geo.radioArt + 4 }, 'onda-g');
+      svg.appendChild(onda);
+      this.ondas[pata] = onda;
       const c = el('circle', { cx: p[0], cy: p[1], r: geo.radioArt + 4 }, 'pie-g');
       svg.appendChild(c);
       this.pies[pata] = c;
@@ -778,6 +954,9 @@ const Gemelo = {
       const nombre = nombreDeMotor(m, total);
       const pos = geo.articulaciones[nombre];
       if (!pos) return;
+      const halo = el('circle', { cx: pos[0], cy: pos[1], r: geo.radioArt + 4 }, 'halo sin-dato');
+      svg.appendChild(halo);
+      this.halos[i] = halo;
       const c = el('circle', { cx: pos[0], cy: pos[1], r: geo.radioArt, tabindex: 0, role: 'img' }, 'art sin-dato');
       const titulo = el('title');
       titulo.textContent = nombre;
@@ -790,11 +969,58 @@ const Gemelo = {
       c.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); PanelMotores.irAFila(i); } });
       svg.appendChild(c);
       this.nodos[i] = c;
+      const partes = nombre.split('_');
+      if (geo.patas && geo.patas[partes[0]] && ['hip', 'thigh', 'calf'].includes(partes[1])) this.rol[i] = { pata: partes[0], parte: partes[1] };
       colocados++;
     });
-    if (colocados < total * 0.6) { this.nodos = []; this.pies = {}; cont.replaceChildren(); sinSilueta('Los nombres de los motores no coinciden con ninguna silueta conocida.'); return; }
+    if (colocados < total * 0.6) { this.nodos = []; this.pies = {}; this.huesos = {}; this.halos = []; this.ondas = {}; this.rol = []; cont.replaceChildren(); sinSilueta('Los nombres de los motores no coinciden con ninguna silueta conocida.'); return; }
     cont.appendChild(svg);
+    this.geo = geo;
+    for (const [pata, d] of Object.entries(geo.patas || {})) { this.actual[pata] = d.reposo; this.objetivo[pata] = d.reposo; }
     $('gemeloEtiqueta').textContent = geo.titulo;
+  },
+
+  /** Calcula la pose objetivo de cada pata con los ángulos del dato y arranca la animación. */
+  mover(motores) {
+    if (!this.geo || !this.geo.patas) return;
+    const ang = {};
+    motores.forEach((m, i) => { const r = this.rol[i]; if (r) (ang[r.pata] = ang[r.pata] || {})[r.parte] = m.angulo; });
+    for (const [pata, d] of Object.entries(this.geo.patas)) this.objetivo[pata] = posePata(d.reposo, d.signo, ang[pata] || {});
+    if (movimientoReducido()) { for (const pata of Object.keys(this.objetivo)) this.actual[pata] = this.objetivo[pata]; this.dibujar(); return; }
+    if (!this.animando) { this.animando = true; requestAnimationFrame(() => this.cuadro()); }
+  },
+
+  /** Un cuadro de la animación: cada punto se acerca a su objetivo, así el movimiento se ve continuo entre dato y dato. */
+  cuadro() {
+    let resto = 0;
+    const paso = (a, b) => { const d = [b[0] - a[0], b[1] - a[1]]; resto = Math.max(resto, Math.abs(d[0]), Math.abs(d[1])); return [a[0] + d[0] * 0.3, a[1] + d[1] * 0.3]; };
+    for (const pata of Object.keys(this.objetivo)) {
+      const a = this.actual[pata], o = this.objetivo[pata];
+      this.actual[pata] = { hip: o.hip, thigh: paso(a.thigh, o.thigh), calf: paso(a.calf, o.calf), pie: paso(a.pie, o.pie) };
+    }
+    this.dibujar();
+    if (resto > 0.05) requestAnimationFrame(() => this.cuadro()); else this.animando = false;
+  },
+
+  dibujar() {
+    const fijar = (n, v) => n.toFixed(1);
+    for (const [pata, pose] of Object.entries(this.actual)) {
+      const h = this.huesos[pata];
+      if (h) {
+        const pts = [pose.hip, pose.thigh, pose.calf, pose.pie];
+        for (let q = 0; q < 3; q++) for (const linea of [h.sombras[q], h.segs[q]]) {
+          linea.setAttribute('x1', fijar(pts[q][0])); linea.setAttribute('y1', fijar(pts[q][1]));
+          linea.setAttribute('x2', fijar(pts[q + 1][0])); linea.setAttribute('y2', fijar(pts[q + 1][1]));
+        }
+      }
+      for (const c of [this.pies[pata], this.ondas[pata]]) if (c) { c.setAttribute('cx', fijar(pose.pie[0])); c.setAttribute('cy', fijar(pose.pie[1])); }
+    }
+    this.rol.forEach((r, i) => {
+      const c = this.nodos[i];
+      if (!r || !c) return;
+      const p = this.actual[r.pata][r.parte];
+      for (const n of [c, this.halos[i]]) if (n) { n.setAttribute('cx', fijar(p[0])); n.setAttribute('cy', fijar(p[1])); }
+    });
   },
 
   /** Resalta (o no) una articulación; la llama la tabla al pasar el mouse por una fila. */
@@ -809,9 +1035,16 @@ const Gemelo = {
       const nivel = clasificarTemp(m.temperatura);
       c.classList.remove('ok', 'warn', 'hot', 'sin-dato');
       c.classList.add(nivel);
+      const halo = this.halos[i];
+      if (halo) { halo.classList.remove('ok', 'warn', 'hot', 'sin-dato'); halo.classList.add(nivel); }
       c.querySelector('title').textContent = nombreDeMotor(m, motores.length) + ' · ' + fmt(m.temperatura, 1) + ' °C · ángulo ' + fmt(m.angulo, 1) + '° · torque ' + fmt(m.torque, 2) + ' N·m';
     });
-    for (const [pata, c] of Object.entries(this.pies)) c.classList.toggle('apoyado', Number((fuerzas || {})[pata]) === 1);
+    for (const [pata, c] of Object.entries(this.pies)) {
+      const apoyado = Number((fuerzas || {})[pata]) === 1;
+      c.classList.toggle('apoyado', apoyado);
+      if (this.ondas[pata]) this.ondas[pata].classList.toggle('activa', apoyado);
+    }
+    this.mover(motores);
   },
 };
 

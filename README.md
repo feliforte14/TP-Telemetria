@@ -24,8 +24,8 @@ El dashboard se conecta a un servidor de telemetría (el backend FastAPI que pro
 
 | Panel | Qué muestra |
 |---|---|
-| **Gemelo digital** | Silueta del robot (vista superior del Go2) con cada articulación coloreada según el semáforo de su motor. Los pies se iluminan al tocar el suelo. Al pasar el mouse por una articulación se resalta su fila en la tabla y al hacer clic se salta a ella. |
-| **Motores** | Una fila por motor (12 en el Go2): **temperatura con semáforo** (verde menos de 40 °C, amarillo de 40 a 60, rojo más de 60), minigráfico de **tendencia** de los últimos 60 datos, ángulo en grados, velocidad angular en rad/s y torque estimado en N·m. La tabla se ordena por temperatura y hay una vista de **mapa de calor** agrupada por pata o articulación. |
+| **Gemelo digital** | Silueta del robot (vista superior del Go2) con cada articulación coloreada según el semáforo de su motor. **Las patas se mueven en vivo** con los ángulos reales de los motores (cadera, muslo y pantorrilla), con una animación suave entre dato y dato, y los pies se iluminan al tocar el suelo. La pose es una aproximación visual de la vista superior, no una cinemática exacta; se desactiva si el sistema pide reducir animaciones. Al pasar el mouse por una articulación se resalta su fila en la tabla y al hacer clic se salta a ella. |
+| **Motores** | Una fila por motor (12 en el Go2): **temperatura con semáforo** (verde menos de 40 °C, amarillo de 40 a 60, rojo más de 60), minigráfico de **tendencia** de los últimos 60 datos, ángulo en grados, velocidad angular en rad/s y torque estimado en N·m. La tabla se ordena por temperatura y hay una vista de **mapa de calor**: una tarjeta por pata ubicada como se ve el robot desde arriba, con un color continuo por motor (verdes bajo 40 °C, de amarillo a naranja hasta 60 °C y rojo por encima), un termómetro con los cortes del semáforo, una flecha si la temperatura sube o baja, el máximo de cada pata y una escala con el promedio general. Al hacer clic en un motor se salta a su fila de la tabla. |
 | **IMU** | Inclinación del robot en grados (*roll*: giro lateral, *pitch*: cabeceo, *yaw*: rumbo) y aceleración en m/s². Incluye un horizonte artificial, una brújula y un gráfico histórico de las últimas 300 muestras. |
 | **Batería (BMS)** | Carga restante (%), corriente (mA), temperatura (°C) y voltaje de cada celda, con la celda más baja y la más alta resaltadas, y un gráfico histórico por celda. |
 | **Fuerzas por pata** | Si cada pata está apoyada en el suelo o en el aire (FR delantera derecha, FL delantera izquierda, RR trasera derecha, RL trasera izquierda). |
@@ -46,6 +46,10 @@ Además:
 | Mapa de calor | Tema claro |
 |---|---|
 | ![Mapa de calor de los motores](entregables/capturas/02-mapa-de-calor.png) | ![Dashboard en tema claro](entregables/capturas/03-dashboard-completo-claro.png) |
+
+| Gemelo digital en movimiento | Vista de celular |
+|---|---|
+| ![Gemelo digital animado](entregables/capturas/gemelo-digital.gif) | <img src="entregables/capturas/06-vista-celular.png" width="220" alt="Vista de celular"> |
 
 ---
 
@@ -270,14 +274,14 @@ TP-Telemetria/
 
 ## 6. Pruebas
 
-Son 26 pruebas, sin dependencias. Hace falta Node.js (probado con la versión 22):
+Son 34 pruebas, sin dependencias. Hace falta Node.js (probado con la versión 22):
 
 ```bash
 node pruebas/test_logica.js
 node pruebas/test_datos.js
 ```
 
-Cubren el semáforo, la disposición del gemelo digital (cada articulación dentro del dibujo y sin superponerse), el cálculo de las tendencias, el buffer circular, el armado y el escape del CSV, las alertas con su histéresis, y la capa de datos contra un servidor falso: polling, robot elegido, error 409, caída del servidor y reconexión.
+Cubren el semáforo, el mapa de calor (escala, colores y tendencias), la disposición y la pose del gemelo digital (cada articulación dentro del dibujo, sin superponerse, con huesos de largo constante y simetría izquierda-derecha), el cálculo de las tendencias, el buffer circular, el armado y el escape del CSV, las alertas con su histéresis, y la capa de datos contra un servidor falso: polling, robot elegido, error 409, caída del servidor y reconexión.
 
 ---
 
@@ -306,13 +310,14 @@ Cubren el semáforo, la disposición del gemelo digital (cada articulación dent
 ## 9. Entregables
 
 - **Código:** `dashboard.html`, `dashboard.css` y `dashboard.js`.
-- **Capturas de pantalla** en [`entregables/capturas/`](entregables/capturas/): dashboard completo con el gemelo digital, los cuatro paneles y el semáforo, tema claro, mapa de calor, captura y exportación, semáforo en rojo (con `?forzarTemp=25`, temperaturas simuladas y avisado en la propia captura), y pérdida de conexión.
+- **Capturas de pantalla** en [`entregables/capturas/`](entregables/capturas/): dashboard completo con el gemelo digital, los cuatro paneles y el semáforo, tema claro, mapa de calor, captura y exportación, vista de celular, gemelo digital animado (GIF), semáforo en rojo (con `?forzarTemp=25`, temperaturas simuladas y avisado en la propia captura), y pérdida de conexión.
 - **CSV exportado** en [`entregables/csv/`](entregables/csv/): sesión de prueba con 12 muestras capturadas manualmente con el botón.
-- **Documento técnico:** pendiente.
+- **Documento técnico** (2 páginas: arquitectura, decisiones de diseño y polling vs WebSocket): [`entregables/documentos/Documento-tecnico-TP05.pdf`](entregables/documentos/Documento-tecnico-TP05.pdf).
+- **Guía del sistema** (qué hace, qué usa y los conceptos: cliente-servidor, WebSocket, polling, Observer): [`entregables/documentos/Guia-del-sistema-TP05.pdf`](entregables/documentos/Guia-del-sistema-TP05.pdf). El código fuente de ambos está en `entregables/documentos/fuente/`.
 
 | Semáforo en rojo (simulado) | Pérdida de conexión |
 |---|---|
-| ![Semáforo en rojo](entregables/capturas/05-semaforo-en-rojo-simulado.png) | ![Sin conexión](entregables/capturas/06-sin-conexion.png) |
+| ![Semáforo en rojo](entregables/capturas/05-semaforo-en-rojo-simulado.png) | ![Sin conexión](entregables/capturas/07-sin-conexion.png) |
 
 ---
 

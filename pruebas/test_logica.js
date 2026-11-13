@@ -77,6 +77,51 @@ t('gemelo digital: cuadrúpedo (12 motores) con las 12 articulaciones y las 4 pa
   assert.deepEqual(Object.keys(g.pies).sort(), ['FL', 'FR', 'RL', 'RR']);
   assert.ok(dentro(g), 'hay puntos fuera del lienzo'); assert.ok(sinSolapes(g), 'hay articulaciones superpuestas');
 });
+t('pose de pata: con los ángulos en cero queda en reposo', () => {
+  const g = D.disposicionGemelo(12);
+  for (const d of Object.values(g.patas)) assert.deepEqual(D.posePata(d.reposo, d.signo, { hip: 0, thigh: 0, calf: 0 }), d.reposo);
+  assert.deepEqual(D.posePata(g.patas.FR.reposo, 1, {}), g.patas.FR.reposo);
+});
+t('pose de pata: conserva la longitud de cada hueso', () => {
+  const g = D.disposicionGemelo(12), d = g.patas.RL, p = D.posePata(d.reposo, d.signo, { hip: 25, thigh: -20, calf: 30 });
+  const L = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
+  for (const [a, b] of [['hip', 'thigh'], ['thigh', 'calf'], ['calf', 'pie']]) assert.ok(Math.abs(L(p[a], p[b]) - L(d.reposo[a], d.reposo[b])) < 1e-9, a + '-' + b);
+});
+t('pose de pata: izquierda y derecha con los mismos ángulos son un espejo', () => {
+  const g = D.disposicionGemelo(12), a = { hip: 18, thigh: -22, calf: 14 };
+  const fr = D.posePata(g.patas.FR.reposo, g.patas.FR.signo, a), fl = D.posePata(g.patas.FL.reposo, g.patas.FL.signo, a);
+  for (const k of ['thigh', 'calf', 'pie']) { assert.ok(Math.abs(fr[k][0] + fl[k][0] - 320) < 1e-9); assert.ok(Math.abs(fr[k][1] - fl[k][1]) < 1e-9); }
+  const rr = D.posePata(g.patas.RR.reposo, g.patas.RR.signo, a);
+  for (const k of ['thigh', 'calf', 'pie']) { assert.ok(Math.abs(fr[k][0] - rr[k][0]) < 1e-9); assert.ok(Math.abs(fr[k][1] + rr[k][1] - 360) < 1e-9); }
+});
+t('pose de pata: con ángulos del simulador (±30°) el pie sigue dentro del dibujo', () => {
+  const g = D.disposicionGemelo(12);
+  for (const d of Object.values(g.patas)) for (const a of [-30, 0, 30]) {
+    const p = D.posePata(d.reposo, d.signo, { hip: a, thigh: a, calf: -a });
+    for (const k of ['thigh', 'calf', 'pie']) assert.ok(p[k][0] >= 0 && p[k][0] <= 320 && p[k][1] >= 0 && p[k][1] <= 360, k + ' fuera del lienzo');
+  }
+});
+t('pose de pata: un ángulo inválido se trata como cero', () => {
+  const g = D.disposicionGemelo(12), d = g.patas.FR;
+  assert.deepEqual(D.posePata(d.reposo, d.signo, { hip: NaN, thigh: null, calf: 'x' }), d.reposo);
+});
+t('mapa de calor: fracción en la escala de 20 a 70 °C', () => {
+  assert.equal(D.fraccionCalor(20), 0); assert.equal(D.fraccionCalor(70), 1); assert.equal(D.fraccionCalor(10), 0); assert.equal(D.fraccionCalor(99), 1);
+  assert.ok(Math.abs(D.fraccionCalor(40) - 0.4) < 1e-9); assert.ok(Math.abs(D.fraccionCalor(60) - 0.8) < 1e-9);
+  assert.equal(D.fraccionCalor(null), null); assert.equal(D.fraccionCalor(NaN), null); assert.equal(D.fraccionCalor('x'), null);
+});
+t('mapa de calor: el color cambia de familia en los cortes del semáforo', () => {
+  const tono = (t) => Number(D.colorCalor(t).match(/hsl\((\d+)/)[1]);
+  assert.ok(tono(30) > 100, 'verde'); assert.ok(tono(39.9) > 100, 'verde hasta 40');
+  assert.ok(tono(40) < 60 && tono(40) > 30, 'amarillo desde 40'); assert.ok(tono(60) < 30, 'naranja en 60');
+  assert.ok(tono(61) < 10, 'rojo por encima de 60'); assert.equal(D.colorCalor(undefined), null);
+  assert.ok(tono(25) > tono(39), 'dentro del verde se va oscureciendo hacia el amarillo');
+});
+t('mapa de calor: tendencia sube, baja o estable', () => {
+  assert.equal(D.tendenciaDe([30, 31, 32]), 'sube'); assert.equal(D.tendenciaDe([35, 34, 33]), 'baja');
+  assert.equal(D.tendenciaDe([30, 30.4, 30.5]), 'estable'); assert.equal(D.tendenciaDe([]), 'estable'); assert.equal(D.tendenciaDe([30]), 'estable');
+  assert.equal(D.tendenciaDe([null, 30, NaN, 32]), 'sube');
+});
 t('gemelo digital: un modelo desconocido no tiene silueta', () => { assert.equal(D.disposicionGemelo(7), null); assert.equal(D.disposicionGemelo(0), null); });
 t('tendencia: pocos datos no dibujan nada', () => { assert.equal(D.puntosTendencia([]), ''); assert.equal(D.puntosTendencia([30]), ''); assert.equal(D.puntosTendencia([null, undefined, NaN]), ''); });
 t('tendencia: una serie que sube dibuja una línea que sube', () => {

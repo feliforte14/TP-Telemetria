@@ -1,0 +1,43 @@
+<!doctype html><html lang="es"><head><meta charset="utf-8"><title>Documento técnico TP05</title><link rel="stylesheet" href="estilo.css"></head><body>
+<h1>Documento técnico · Dashboard de telemetría Unitree Go2</h1>
+<div class="sub">TP05 · Desarrollo de Aplicaciones II · UADE · Frontend web (HTML, CSS y JavaScript) · Repositorio: github.com/feliforte14/TP-Telemetria</div>
+
+<h2>1. Arquitectura</h2>
+<p>El sistema es una aplicación <b>cliente-servidor</b> con dos partes independientes que solo se conocen por la API. El <b>backend</b> (FastAPI, provisto por la cátedra) lee el robot o el simulador y expone <code>GET /telemetria</code> y <code>WS /ws</code>. El <b>frontend</b> (este trabajo) corre íntegramente en el navegador, sin framework ni servidor propio; Chart.js se carga por CDN. El dashboard es de solo lectura: no envía comandos al robot.</p>
+<svg viewBox="0 0 700 118" width="640" font-family="Helvetica, Arial" font-size="11">
+ <rect x="4" y="30" width="120" height="52" rx="6" fill="#eef3f7" stroke="#8aa0b3"/><text x="64" y="52" text-anchor="middle" font-weight="bold">Robot / simulador</text><text x="64" y="68" text-anchor="middle" fill="#5a6877">motores, IMU, BMS, patas</text>
+ <rect x="170" y="8" width="150" height="100" rx="6" fill="#eef3f7" stroke="#8aa0b3"/><text x="245" y="28" text-anchor="middle" font-weight="bold">Backend FastAPI</text><rect x="184" y="40" width="122" height="24" rx="4" fill="#fff" stroke="#8aa0b3"/><text x="245" y="56" text-anchor="middle">GET /telemetria</text><rect x="184" y="72" width="122" height="24" rx="4" fill="#fff" stroke="#8aa0b3"/><text x="245" y="88" text-anchor="middle">WebSocket /ws</text>
+ <rect x="372" y="8" width="324" height="100" rx="6" fill="#f6f9fb" stroke="#0b7fa8" stroke-width="1.5"/><text x="534" y="26" text-anchor="middle" font-weight="bold">Navegador (dashboard)</text>
+ <rect x="384" y="36" width="104" height="60" rx="4" fill="#fff" stroke="#0b7fa8"/><text x="436" y="58" text-anchor="middle" font-weight="bold">Telemetria</text><text x="436" y="72" text-anchor="middle" fill="#5a6877">Subject (Observer)</text><text x="436" y="86" text-anchor="middle" fill="#5a6877">valida y publica</text>
+ <rect x="522" y="36" width="82" height="60" rx="4" fill="#fff" stroke="#0b7fa8"/><text x="563" y="58" text-anchor="middle" font-weight="bold">Paneles</text><text x="563" y="72" text-anchor="middle" fill="#5a6877">Observers</text><text x="563" y="86" text-anchor="middle" fill="#5a6877">8 vistas</text>
+ <rect x="618" y="36" width="70" height="60" rx="4" fill="#fff" stroke="#0b7fa8"/><text x="653" y="58" text-anchor="middle" font-weight="bold">CSV</text><text x="653" y="72" text-anchor="middle" fill="#5a6877">Blob local</text>
+ <path d="M124 56H170M320 52H372M320 84H372M488 66H522M604 66H618" stroke="#0b7fa8" stroke-width="1.6" fill="none"/>
+</svg>
+<p>Dentro del navegador, <code>dashboard.js</code> se organiza en cinco bloques: (1) configuración y lógica pura (semáforo, buffer circular, validación, armado del CSV), (2) <code>Telemetria</code>, la capa de acceso a datos, (3) los paneles, (4) captura y exportación y (5) la aplicación que los conecta. La lógica pura no toca la pantalla, por lo que se prueba con Node (34 pruebas automáticas).</p>
+
+<h2>2. Decisiones de diseño</h2>
+<table>
+<tr><th style="width:27%">Decisión</th><th>Motivo</th></tr>
+<tr><td><b>Patrón Observer</b> entre <code>Telemetria</code> y los paneles</td><td><code>Telemetria</code> emite los eventos <code>dato</code> y <code>estado</code>; cada panel se suscribe con <code>en(evento, fn)</code>. La pantalla no sabe si el dato vino por WebSocket o polling, se puede cambiar la fuente sin tocar los paneles y un suscriptor que falla no corta a los demás (<code>try/catch</code> por aviso).</td></tr>
+<tr><td><b>Buffer circular de 300 muestras</b></td><td>30 s de historia a 10 Hz con memoria acotada: al llenarse se descarta la más antigua. Los gráficos no se recrean: se actualiza el mismo componente Chart.js sin animación, para no trabar el navegador (el mínimo exigido son 60 muestras).</td></tr>
+<tr><td><b>Semáforo de motores</b> (verde &lt;40 °C, amarillo 40–60, rojo &gt;60)</td><td>Función pura probada en los bordes (60,0 °C es amarillo). Se muestra con color <i>y</i> texto («Normal», «Precaución», «Sobrecalentado») para no depender solo del color. Las alertas saltan al pasar 60 °C y se rearman bajo 58 °C (histéresis), y varios motores simultáneos generan una sola muestra.</td></tr>
+<tr><td><b>CSV generado en el navegador</b></td><td>Se arma con la API <code>Blob</code> y se descarga sin pasar por el servidor. Lleva BOM (Excel lee bien las tildes), una columna por magnitud (74 en el Go2) y escapa textos que empiezan con <code>=</code>, <code>+</code>, <code>-</code> o <code>@</code> para evitar inyección de fórmulas.</td></tr>
+<tr><td><b>Pérdida de conexión visible</b></td><td>Indicador de estado, aviso rojo, paneles atenuados con los últimos valores y reintento automático. Un vigilante revisa cada segundo que lleguen datos (2 s sin datos = caído), porque el navegador no siempre avisa del corte.</td></tr>
+<tr><td><b>Seguridad y robustez</b></td><td>Todo dato del servidor se escribe con <code>textContent</code> (nunca como HTML). Cada mensaje se valida contra el contrato; los inválidos se descartan y se cuentan. Cada pedido tiene tiempo máximo de 2 s.</td></tr>
+<tr><td><b>Interfaz</b></td><td>Cuatro paneles obligatorios más <i>gemelo digital</i> (silueta cuyas patas se mueven con los ángulos reales y cuyas articulaciones se colorean por temperatura), tendencia por motor, temas oscuro y claro, y adaptación a tablet y celular.</td></tr>
+</table>
+
+<h2>3. Polling vs. WebSocket</h2>
+<p><b>Polling</b>: el cliente pregunta cada cierto tiempo (<code>GET /telemetria</code> cada 250 ms; la consigna admite hasta 500 ms). Es simple y funciona con cualquier proxy, pero cada dato cuesta un pedido HTTP completo, el dato puede tener hasta un intervalo de antigüedad y el servidor trabaja aunque no haya novedades. Se agenda el siguiente pedido recién cuando termina el anterior, para que nunca se acumulen. <b>WebSocket</b>: se abre una conexión persistente y el servidor <i>empuja</i> cada mensaje apenas lo tiene (~10 por segundo); no hay encabezados repetidos ni espera, y los datos llegan con la cadencia real del robot.</p>
+<table>
+<tr><th>Criterio</th><th>Polling (250 ms)</th><th>WebSocket</th></tr>
+<tr><td>Mensajes por segundo (medido)</td><td>~4</td><td>~9,8</td></tr>
+<tr><td>Tráfico recibido (medido)</td><td>~5,5 KB/s</td><td>~13,4 KB/s</td></tr>
+<tr><td>Latencia del pedido (medida)</td><td>~7 ms por pedido, más hasta 250 ms de espera</td><td>no aplica (push)</td></tr>
+<tr><td>Frescura del dato</td><td>hasta un intervalo de retraso</td><td>inmediata</td></tr>
+<tr><td>Complejidad / compatibilidad</td><td>baja, universal, admite parámetros (<code>?modelo=</code>)</td><td>media: hay que reconectar; no admite parámetros</td></tr>
+</table>
+<div class="caja"><b>Decisión:</b> modo <b>automático</b> por defecto. Se intenta el WebSocket (datos más frescos y fluidos); si falla, se continúa por polling mientras se reintenta el WebSocket con espera creciente (1 a 10 s), y se vuelve a él apenas se recupera. El polling queda como respaldo y como único camino cuando se elige un robot (<code>?modelo=</code>). El usuario puede forzar cualquiera de los dos desde el selector «Fuente de datos». Con polling a 250 ms se cumple holgadamente el máximo de 500 ms de la consigna.</div>
+<h3>Limitaciones conocidas</h3>
+<p>El simulador de la cátedra deriva torque, temperatura, roll y pitch del movimiento, por lo que con el robot real los valores serán otros. El servidor atiende un solo robot por vez y tiene CORS abierto: debe usarse solo en la red cerrada del laboratorio.</p>
+</body></html>

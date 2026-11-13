@@ -1,0 +1,17 @@
+@page { size: A4; margin: 14mm 15mm; }
+* { box-sizing: border-box; }
+body { font: 9.6pt/1.38 "Helvetica Neue", Arial, sans-serif; color: #1b2430; margin: 0; }
+h1 { font-size: 17pt; margin: 0 0 1mm; color: #0b3a5b; }
+.sub { color: #5a6877; font-size: 8.8pt; margin-bottom: 3mm; border-bottom: 1.5px solid #0b7fa8; padding-bottom: 2mm; }
+h2 { font-size: 11.5pt; color: #0b3a5b; margin: 4mm 0 1.2mm; }
+h3 { font-size: 10pt; margin: 2.5mm 0 .8mm; color: #0b5f82; }
+p { margin: 0 0 1.8mm; text-align: justify; }
+ul { margin: 0 0 2mm; padding-left: 5mm; } li { margin-bottom: .7mm; }
+code { font-family: Menlo, monospace; font-size: 8.6pt; background: #eef3f7; padding: 0 1.2mm; border-radius: 2px; }
+table { border-collapse: collapse; width: 100%; margin: 1.5mm 0 2.5mm; font-size: 8.8pt; }
+th, td { border: 1px solid #c9d4de; padding: 1.1mm 1.8mm; text-align: left; vertical-align: top; }
+th { background: #e6f0f6; }
+.caja { border: 1px solid #c9d4de; background: #f6f9fb; padding: 2mm 3mm; border-radius: 3px; margin: 2mm 0; }
+svg { display: block; margin: 1.5mm auto; max-width: 100%; }
+.salto { page-break-before: always; }
+tr, .caja, svg { page-break-inside: avoid; }
