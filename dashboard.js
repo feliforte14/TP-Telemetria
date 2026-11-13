@@ -23,6 +23,7 @@
 
 const CONFIG = Object.freeze({
   API_POR_DEFECTO: 'http://localhost:8001',
+  API_CANDIDATAS: ['http://localhost:8001', 'http://localhost:8000'],   // 8001: laboratorio; 8000: servidor de ejemplo del enunciado
   POLL_MS: 250,                 // la consigna pide como máximo 500 ms
   TIMEOUT_MS: 2000,             // tiempo máximo de espera de cada pedido HTTP
   HIST_SIZE: 300,               // buffer circular (30 s a 10 Hz, como electroSim)
@@ -222,6 +223,7 @@ class Telemetria {
   constructor() {
     this.oyentes = { dato: [], estado: [] };
     this.base = null;
+    this.modelo = '';
     this.modo = 'auto';
     this.estado = 'conectando';
     this.detalle = '';
@@ -257,10 +259,13 @@ class Telemetria {
     this._emitir('estado', { estado, detalle, intentos: this.intentos });
   }
 
-  iniciar(base, modo = 'auto') {
+  /** `modelo` ('go2' o 'g1') es opcional: se manda como ?modelo= en el polling. El WebSocket no permite elegir robot. */
+  iniciar(base, modo = 'auto', modelo = '') {
     this.detener();
     this.base = base;
-    this.modo = modo;
+    this.modelo = modelo || '';
+    this.modo = this.modelo ? 'polling' : modo;
+    modo = this.modo;
     this.intentos = 0;
     this.ultimoDato = null;
     this.ultimoDatoEn = 0;
@@ -398,8 +403,13 @@ class Telemetria {
     const ctrl = new AbortController();
     const corte = setTimeout(() => ctrl.abort(), CONFIG.TIMEOUT_MS);
     try {
-      const resp = await fetch(this.base + '/telemetria', { signal: ctrl.signal, cache: 'no-store' });
-      if (!resp.ok) throw new Error('El servidor respondió HTTP ' + resp.status);
+      const url = this.base + '/telemetria' + (this.modelo ? '?modelo=' + encodeURIComponent(this.modelo) : '');
+      const resp = await fetch(url, { signal: ctrl.signal, cache: 'no-store' });
+      if (!resp.ok) {
+        let detalle = '';
+        try { const j = await resp.json(); if (j && typeof j.detail === 'string') detalle = j.detail; } catch { /* sin cuerpo JSON */ }
+        throw new Error(detalle || 'El servidor respondió HTTP ' + resp.status);
+      }
       const texto = await resp.text();
       if (gen !== this._gen || !this._pollActivo) return;
       this._fallosPoll = 0;
@@ -428,7 +438,9 @@ class Telemetria {
 /* Exportación para las pruebas con Node (en el navegador no existe `module`). */
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
-    CONFIG, clasificarTemp, fmt, RingBuffer, validarTelemetria, normalizarBase, wsUrl, aplanarMuestra, escaparCSV, construirCSV, estadisticaCeldas, motoresNuevosEnAlerta, Telemetria, nombreDeMotor, limitarPorcentaje, colorBateria,
+    CONFIG, clasificarTemp, fmt, RingBuffer, validarTelemetria, normalizarBase, wsUrl,
+    aplanarMuestra, escaparCSV, construirCSV, estadisticaCeldas, motoresNuevosEnAlerta, Telemetria,
+    nombreDeMotor, limitarPorcentaje, colorBateria,
   };
 }
 
@@ -1105,22 +1117,47 @@ function iniciarApp() {
 
   /* ---------- conexión: servidor y fuente ---------- */
   let baseActual = null;
-  function conectar(base, modo) {
+  function conectar(base, modo, modelo = '') {
     baseActual = base;
     modeloActual = null;
+    if (modelo && modo !== 'polling') {
+      // El WebSocket no permite elegir robot (ws://host/ws no recibe parámetros): con robot elegido se usa polling.
+      modo = 'polling';
+      toast('Con un robot elegido se usa polling: el WebSocket transmite el robot al que está conectado el servidor.', 'aviso');
+    }
     $('inpApi').value = base;
+    $('selFuente').value = modo;
+    $('selModelo').value = modelo;
     guardarAlmacenado('tp05.api', base);
     guardarAlmacenado('tp05.fuente', modo);
-    telemetria.iniciar(base, modo);
+    guardarAlmacenado('tp05.modelo', modelo);
+    telemetria.iniciar(base, modo, modelo);
   }
   $('formApi').addEventListener('submit', (e) => {
     e.preventDefault();
-    try { conectar(normalizarBase($('inpApi').value), $('selFuente').value); }
+    try { conectar(normalizarBase($('inpApi').value), $('selFuente').value, $('selModelo').value); }
     catch (err) { toast(err.message, 'aviso'); }
   });
   $('selFuente').addEventListener('change', () => {
-    if (baseActual) conectar(baseActual, $('selFuente').value);
+    if (baseActual) conectar(baseActual, $('selFuente').value, $('selModelo').value);
   });
+  $('selModelo').addEventListener('change', () => {
+    if (baseActual) conectar(baseActual, $('selFuente').value, $('selModelo').value);
+  });
+
+  /** Si no se indicó servidor, prueba las direcciones habituales y usa la primera que responde. */
+  async function detectarServidor(candidatas) {
+    const probar = async (dir) => {
+      const ctrl = new AbortController();
+      const corte = setTimeout(() => ctrl.abort(), 1200);
+      try {
+        const r = await fetch(dir + '/telemetria', { signal: ctrl.signal, cache: 'no-store' });
+        return (r.ok || r.status === 409) ? dir : null;
+      } catch { return null; } finally { clearTimeout(corte); }
+    };
+    const respuestas = await Promise.all(candidatas.map(probar));
+    return respuestas.find(Boolean) || null;
+  }
 
   /* ---------- estadísticas y "datos desactualizados" ---------- */
   setInterval(() => {
@@ -1143,13 +1180,21 @@ function iniciarApp() {
     av.hidden = false;
     av.textContent = 'Modo de prueba: temperaturas simuladas con ' + (forzarTemp > 0 ? '+' : '') + forzarTemp + ' °C sobre el valor del servidor (parámetro forzarTemp), solo para verificar el semáforo.';
   }
-  let base;
-  try { base = normalizarBase(params.get('api') || leerAlmacenado('tp05.api') || CONFIG.API_POR_DEFECTO); }
-  catch { base = CONFIG.API_POR_DEFECTO; }
   const fuenteGuardada = params.get('fuente') || leerAlmacenado('tp05.fuente');
   const fuente = ['auto', 'ws', 'polling'].includes(fuenteGuardada) ? fuenteGuardada : 'auto';
-  $('selFuente').value = fuente;
-  conectar(base, fuente);
+  const modeloGuardado = (params.get('modelo') || leerAlmacenado('tp05.modelo') || '').toLowerCase();
+  const modelo = ['go2', 'g1'].includes(modeloGuardado) ? modeloGuardado : '';
+  const indicada = params.get('api') || leerAlmacenado('tp05.api');
+  if (indicada) {
+    let base;
+    try { base = normalizarBase(indicada); } catch { base = CONFIG.API_POR_DEFECTO; }
+    conectar(base, fuente, modelo);
+  } else {
+    // Primera vez y sin ?api=: se busca el servidor en las direcciones habituales (8001 del laboratorio y 8000 del enunciado).
+    $('selFuente').value = fuente;
+    $('selModelo').value = modelo;
+    detectarServidor(CONFIG.API_CANDIDATAS).then((hallada) => conectar(hallada || CONFIG.API_POR_DEFECTO, fuente, modelo));
+  }
 }
 
 if (typeof document !== 'undefined') {
