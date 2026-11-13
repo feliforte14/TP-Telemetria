@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dashboard de telemetría · Unitree · TP05</title>
+  <link rel="stylesheet" href="dashboard.css">
+  <!-- Chart.js por CDN, versión fija. Si no hay internet, los gráficos se desactivan pero el resto funciona. -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+</head>
+<body data-conexion="conectando">
+
+  <header class="barra">
+    <div class="marca">
+      <div>
+        <h1>Dashboard de telemetría</h1>
+        <p id="nombreRobot" class="sub">Unitree · esperando datos…</p>
+      </div>
+    </div>
+
+    <div class="controles">
+      <div id="pillConexion" class="pill" role="status" aria-live="polite">
+        <span class="punto" aria-hidden="true"></span>
+        <span id="pillTexto">Conectando…</span>
+      </div>
+
+      <label class="campo">
+        <span>Fuente de datos</span>
+        <select id="selFuente">
+          <option value="auto">Automática (WebSocket, con respaldo por polling)</option>
+          <option value="ws">Solo WebSocket</option>
+          <option value="polling">Solo polling (HTTP)</option>
+        </select>
+      </label>
+
+      <form id="formApi" class="campo campo-api" autocomplete="off">
+        <span>Servidor</span>
+        <span class="fila">
+          <input id="inpApi" type="text" inputmode="url" spellcheck="false" aria-label="Dirección del servidor de telemetría">
+          <button type="submit" class="btn">Conectar</button>
+        </span>
+      </form>
+
+    </div>
+  </header>
+
+  <div id="banner" class="banner" role="alert" hidden>
+    <span><strong>Sin conexión con el servidor.</strong> <span id="bannerTexto"></span></span>
+  </div>
+
+  <div id="avisoPrueba" class="aviso-prueba" hidden></div>
+
+  <main class="grilla">
+
+    <!-- ============ Panel 1: Motores ============ -->
+    <section class="panel panel-motores" id="panelMotores" aria-labelledby="tMotores">
+      <div class="panel-cab">
+        <h2 id="tMotores">Motores</h2>
+        <div class="chips" aria-label="Resumen de temperaturas">
+          <span class="chip ok"><b id="chipOk">0</b> normales</span>
+          <span class="chip warn"><b id="chipWarn">0</b> precaución</span>
+          <span class="chip hot"><b id="chipHot">0</b> sobrecalentados</span>
+          <span class="chip neutro">máx. <b id="chipMax">—</b></span>
+        </div>
+      </div>
+      <p class="desc">Estado de cada articulación: temperatura del motor, ángulo (°), velocidad angular (rad/s) y torque estimado (N·m). El semáforo marca de un vistazo qué motores se calientan.</p>
+
+      <div class="tabla-wrap" id="tablaWrap">
+        <table id="tablaMotores">
+          <thead>
+            <tr>
+              <th>Motor</th>
+              <th>Temperatura</th>
+              <th>Estado</th>
+              <th>Ángulo (°)</th>
+              <th>Velocidad (rad/s)</th>
+              <th>Torque (N·m)</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <p class="leyenda">
+        Semáforo:
+        <span class="sem ok">verde &lt; 40 °C</span>
+        <span class="sem warn">amarillo 40–60 °C</span>
+        <span class="sem hot">rojo &gt; 60 °C</span>
+      </p>
+    </section>
+
+    <!-- ============ Panel 2: IMU ============ -->
+    <section class="panel panel-imu" id="panelImu" aria-labelledby="tImu">
+      <div class="panel-cab">
+        <h2 id="tImu">IMU</h2>
+        <span id="imuBuffer" class="nota">0 / 300 muestras</span>
+      </div>
+      <p class="desc">Unidad de medición inercial: inclinación del robot en grados (roll = giro lateral, pitch = cabeceo, yaw = rumbo) y aceleración en m/s².</p>
+
+        <div class="angulos">
+          <div class="valor"><span class="etq">Roll</span><span class="num" id="roll">—</span></div>
+          <div class="valor"><span class="etq">Pitch</span><span class="num" id="pitch">—</span></div>
+          <div class="valor"><span class="etq">Yaw</span><span class="num" id="yaw">—</span></div>
+          <div class="acel">
+            Aceleración (m/s²)
+            <span>ax <b id="ax">—</b></span>
+            <span>ay <b id="ay">—</b></span>
+            <span>az <b id="az">—</b></span>
+          </div>
+        </div>
+
+      <div class="grafico"><canvas id="chartImu" aria-label="Historial de roll, pitch y yaw" role="img"></canvas></div>
+      <p class="desc-grafico">Evolución de roll, pitch y yaw (grados) en las últimas 300 muestras.</p>
+    </section>
+
+    <!-- ============ Panel 3: BMS ============ -->
+    <section class="panel panel-bms" id="panelBms" aria-labelledby="tBms">
+      <div class="panel-cab"><h2 id="tBms">Batería (BMS)</h2></div>
+      <p class="desc">Sistema de gestión de la batería: carga restante (%), corriente (mA), temperatura (°C) y voltaje (V) de cada celda. Una diferencia grande entre celdas indica que están desbalanceadas.</p>
+      <div class="soc">
+        <span class="num" id="soc">—</span>
+        <div class="barra-soc" aria-hidden="true"><div id="socBarra"></div></div>
+      </div>
+      <dl class="datos">
+        <div><dt>Corriente</dt><dd id="bmsCorriente">—</dd></div>
+        <div><dt>Temperatura</dt><dd id="bmsTemp">—</dd></div>
+      </dl>
+      <h3>Voltaje por celda</h3>
+      <div id="celdas" class="celdas"></div>
+      <p id="celdasResumen" class="nota"></p>
+    </section>
+
+    <!-- ============ Panel 4: Fuerzas por pata ============ -->
+    <section class="panel panel-patas" id="panelPatas" aria-labelledby="tPatas">
+      <div class="panel-cab"><h2 id="tPatas">Fuerzas por pata</h2><span id="patasResumen" class="nota"></span></div>
+      <p class="desc">Contacto de cada pata con el suelo, según la fuerza que reporta el robot. Permite seguir la marcha: cuántas patas apoyan y cuáles.</p>
+      <div id="patas" class="patas"></div>
+      <p class="leyenda centrada"><span class="sem ok">apoyada</span> <span class="sem aire">en el aire</span></p>
+    </section>
+
+  </main>
+
+  <div id="toasts" class="toasts" aria-live="polite"></div>
+
+  <footer class="pie">
+    TP05 · Desarrollo de Aplicaciones II · UADE. Solo lectura: este dashboard no envía ningún comando al robot.
+  </footer>
+
+</body>
+</html>
