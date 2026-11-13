@@ -454,13 +454,38 @@ function colorMotor(indice, total) {
   return 'hsl(' + Math.round((indice * 360) / Math.max(total, 1)) + ', 70%, 60%)';
 }
 
+/** Lee los colores del tema activo (variables CSS) para que los gráficos combinen con la pantalla. */
+function coloresChart() {
+  const css = getComputedStyle(document.documentElement);
+  return {
+    texto: css.getPropertyValue('--texto-suave').trim() || '#94a3b8',
+    grilla: css.getPropertyValue('--borde').trim() || '#334155',
+  };
+}
+
 function configurarChartJs() {
   if (typeof Chart === 'undefined') return false;
-  Chart.defaults.color = '#94a3b8';
-  Chart.defaults.borderColor = 'rgba(148, 163, 184, .18)';
+  const c = coloresChart();
+  Chart.defaults.color = c.texto;
+  Chart.defaults.borderColor = c.grilla;
   Chart.defaults.font.family = 'system-ui, sans-serif';
   Chart.defaults.animation = false;
   return true;
+}
+
+/** Cambia el tema de un gráfico que ya existe, sin perder sus datos. */
+function recolorearChart(chart) {
+  if (!chart) return;
+  const c = coloresChart();
+  chart.options.color = c.texto;
+  for (const eje of ['x', 'y']) {
+    const e = chart.options.scales[eje];
+    e.ticks.color = c.texto;
+    e.grid = { ...(e.grid || {}), color: c.grilla };
+    e.title.color = c.texto;
+  }
+  chart.options.plugins.legend.labels.color = c.texto;
+  chart.update('none');
 }
 
 const opcionesLinea = (etiquetaY) => ({
@@ -476,9 +501,14 @@ const opcionesLinea = (etiquetaY) => ({
   plugins: { legend: { labels: { boxWidth: 12 } } },
 });
 
-/* ---------- Panel de motores ---------- */
+/* ---------- Panel de motores (tabla ordenable + mapa de calor) ---------- */
 const PanelMotores = {
   filas: [],
+  mosaicos: [],
+  orden: 'ninguno',          // 'ninguno' | 'desc' | 'asc' (por temperatura)
+  ordenDOM: [],
+  ultimos: [],
+
   construir(motores) {
     const tbody = document.querySelector('#tablaMotores tbody');
     tbody.replaceChildren();
@@ -488,6 +518,7 @@ const PanelMotores = {
       const temp = crear('td', 'temp sin-dato');
       temp.appendChild(pastilla);
       const celdas = {
+        tr,
         nombre: crear('td', '', nombreDeMotor(m, motores.length)),
         temp,
         tempTexto: pastilla,
@@ -500,27 +531,125 @@ const PanelMotores = {
       tbody.appendChild(tr);
       return celdas;
     });
+    this.ordenDOM = this.filas.map((_, i) => i);
+    this.ultimos = [];
+    this._construirMapa(motores);
   },
+
+  /** Agrupa los motores por el prefijo del nombre (FR_hip -> grupo FR). Sirve para Go2 y G1. */
+  _construirMapa(motores) {
+    const cont = $('mapaMotores');
+    cont.replaceChildren();
+    this.mosaicos = [];
+    const grupos = new Map();
+    motores.forEach((m, i) => {
+      const nombre = nombreDeMotor(m, motores.length);
+      const corte = nombre.indexOf('_');
+      const grupo = corte > 0 ? nombre.slice(0, corte) : 'Motores';
+      const corto = corte > 0 ? nombre.slice(corte + 1) : nombre;
+      if (!grupos.has(grupo)) grupos.set(grupo, []);
+      grupos.get(grupo).push({ i, corto });
+    });
+    for (const [grupo, items] of grupos) {
+      const fila = crear('div', 'mapa-grupo');
+      fila.appendChild(crear('b', '', grupo));
+      const mosaicos = crear('div', 'mapa-fila');
+      for (const { i, corto } of items) {
+        const t = crear('div', 'mosaico');
+        t.appendChild(crear('small', '', corto));
+        t.appendChild(crear('b', '', '—'));
+        mosaicos.appendChild(t);
+        this.mosaicos[i] = t;
+      }
+      fila.appendChild(mosaicos);
+      cont.appendChild(fila);
+    }
+  },
+
+  mostrarVista(vista) {
+    const mapa = vista === 'mapa';
+    $('tablaWrap').hidden = mapa;
+    $('mapaMotores').hidden = !mapa;
+    $('vistaTabla').setAttribute('aria-pressed', String(!mapa));
+    $('vistaMapa').setAttribute('aria-pressed', String(mapa));
+  },
+
+  /** Alterna el orden de la tabla: original, de más caliente a más frío, de más frío a más caliente. */
+  cambiarOrden() {
+    this.orden = this.orden === 'ninguno' ? 'desc' : this.orden === 'desc' ? 'asc' : 'ninguno';
+    $('thTemp').setAttribute('aria-sort', this.orden === 'desc' ? 'descending' : this.orden === 'asc' ? 'ascending' : 'none');
+    this._ordenar();
+  },
+
+  _ordenar() {
+    const t = (i) => (this.ultimos[i] && typeof this.ultimos[i].temperatura === 'number') ? this.ultimos[i].temperatura : -Infinity;
+    let indices = this.filas.map((_, i) => i);
+    if (this.orden === 'desc') indices.sort((a, b) => t(b) - t(a) || a - b);
+    else if (this.orden === 'asc') indices.sort((a, b) => t(a) - t(b) || a - b);
+    if (indices.join() === this.ordenDOM.join()) return;      // nada que mover
+    this.ordenDOM = indices;
+    document.querySelector('#tablaMotores tbody').append(...indices.map((i) => this.filas[i].tr));
+  },
+
+  /** Actualiza tabla y mapa. Devuelve un resumen para el panel de indicadores. */
   actualizar(motores) {
     const cuenta = { 'ok': 0, 'warn': 0, 'hot': 0 };
     let maxT = -Infinity;
+    let maxNombre = '';
+    this.ultimos = motores;
     motores.forEach((m, i) => {
       const f = this.filas[i];
       if (!f) return;
       const nivel = clasificarTemp(m.temperatura);
+      const texto = fmt(m.temperatura, 1) + ' °C';
       f.temp.className = 'temp ' + nivel;
-      f.tempTexto.textContent = fmt(m.temperatura, 1) + ' °C';
+      f.tempTexto.textContent = texto;
       f.estado.textContent = ETIQUETAS_TEMP[nivel];
       f.angulo.textContent = fmt(m.angulo, 2);
       f.velocidad.textContent = fmt(m.velocidad, 3);
       f.torque.textContent = fmt(m.torque, 2);
+      const mosaico = this.mosaicos[i];
+      if (mosaico) {
+        mosaico.className = 'mosaico ' + nivel;
+        mosaico.lastChild.textContent = fmt(m.temperatura, 1) + '°';
+        mosaico.title = nombreDeMotor(m, motores.length) + ' · ' + texto + ' · ángulo ' + fmt(m.angulo, 1) + '° · torque ' + fmt(m.torque, 2) + ' N·m';
+      }
       if (nivel in cuenta) cuenta[nivel]++;
-      if (typeof m.temperatura === 'number' && m.temperatura > maxT) maxT = m.temperatura;
+      if (typeof m.temperatura === 'number' && m.temperatura > maxT) { maxT = m.temperatura; maxNombre = nombreDeMotor(m, motores.length); }
     });
+    this._ordenar();
     $('chipOk').textContent = cuenta.ok;
     $('chipWarn').textContent = cuenta.warn;
     $('chipHot').textContent = cuenta.hot;
     $('chipMax').textContent = Number.isFinite(maxT) ? fmt(maxT, 1) + ' °C' : '—';
+    return { cuenta, total: motores.length, maxT: Number.isFinite(maxT) ? maxT : null, maxNombre };
+  },
+};
+
+/* ---------- Indicadores de un vistazo (tarjetas de arriba) ---------- */
+const Resumen = {
+  actualizar(data, motores) {
+    const nivel = clasificarTemp(motores.maxT);
+    $('kpiTemp').textContent = motores.maxT === null ? '—' : fmt(motores.maxT, 1) + ' °C';
+    $('kpiTempSub').textContent = motores.maxNombre ? 'en ' + motores.maxNombre : ' ';
+    $('kpiTempCard').className = 'kpi ' + (nivel === 'sin-dato' ? '' : nivel);
+
+    const enRiesgo = motores.cuenta.warn + motores.cuenta.hot;
+    $('kpiRiesgo').textContent = enRiesgo + ' de ' + motores.total;
+    $('kpiRiesgoSub').textContent = motores.cuenta.hot + ' rojos · ' + motores.cuenta.warn + ' amarillos';
+    $('kpiRiesgoCard').className = 'kpi ' + (motores.cuenta.hot ? 'hot' : motores.cuenta.warn ? 'warn' : 'ok');
+
+    const soc = data.bms && data.bms.soc;
+    const pct = limitarPorcentaje(soc);
+    $('kpiBat').textContent = typeof soc === 'number' ? fmt(soc, 0) + ' %' : '—';
+    const barra = $('kpiBatBarra');
+    barra.style.width = pct + '%';
+    barra.style.background = colorBateria(pct);
+
+    const patas = Object.keys(data.fuerzas || {});
+    const apoyadas = patas.filter((p) => Number(data.fuerzas[p]) === 1);
+    $('kpiPatas').textContent = patas.length ? apoyadas.length + ' de ' + patas.length : '—';
+    $('kpiPatasSub').textContent = patas.length ? (apoyadas.join(' · ') || 'ninguna apoyada') : 'este modelo no las reporta';
   },
 };
 
@@ -542,6 +671,7 @@ const PanelIMU = {
       options: opcionesLinea('grados'),
     });
   },
+  recolorear() { recolorearChart(this.chart); },
   actualizar(imu, ts) {
     $('roll').textContent = fmt(imu.roll, 2) + ' °';
     $('pitch').textContent = fmt(imu.pitch, 2) + ' °';
@@ -549,6 +679,13 @@ const PanelIMU = {
     $('ax').textContent = fmt(imu.ax, 3);
     $('ay').textContent = fmt(imu.ay, 3);
     $('az').textContent = fmt(imu.az, 3);
+
+    // Instrumentos: el horizonte gira con el roll y se desplaza con el pitch; la flecha sigue al yaw.
+    if (Number.isFinite(imu.roll) && Number.isFinite(imu.pitch)) {
+      const pitch = Math.max(-35, Math.min(35, imu.pitch));
+      $('horizonteGrupo').style.transform = 'rotate(' + (-imu.roll) + 'deg) translateY(' + (pitch * 2.2) + 'px)';
+    }
+    if (Number.isFinite(imu.yaw)) $('brujulaFlecha').style.transform = 'rotate(' + imu.yaw + 'deg)';
 
     this.etiquetas.push(typeof ts === 'number' ? ts.toFixed(1) : '');
     for (const k of Object.keys(this.series)) this.series[k].push(typeof imu[k] === 'number' ? imu[k] : null);
@@ -630,6 +767,7 @@ const PanelCeldas = {
       options: opciones,
     });
   },
+  recolorear() { recolorearChart(this.chart); },
   actualizar(celdas, ts) {
     const validas = Array.isArray(celdas) ? celdas : [];
     $('panelCeldasHist').hidden = validas.length === 0;
@@ -751,6 +889,7 @@ const PanelTemp = {
     opciones.plugins.legend.labels.filter = (item) => !item.hidden;     // la leyenda solo muestra los motores visibles
     this.chart = new Chart($('chartTemp'), { type: 'line', data: { labels: [], datasets }, options: opciones });
   },
+  recolorear() { recolorearChart(this.chart); },
   _visibilidad() {
     if (!this.chart) return;
     document.querySelectorAll('#selectorMotores input').forEach((chk) => {
@@ -879,7 +1018,9 @@ function iniciarApp() {
     const data = aplicarAjusteDePrueba(crudo);
     if (data.modelo !== modeloActual || data.motores.length !== cantMotores) prepararModelo(data);
     ultimo = data;
-    PanelMotores.actualizar(data.motores);
+    document.body.classList.add('con-datos');
+    const resumenMotores = PanelMotores.actualizar(data.motores);
+    Resumen.actualizar(data, resumenMotores);
     PanelIMU.actualizar(data.imu, data.ts);
     PanelBMS.actualizar(data.bms);
     PanelCeldas.actualizar(data.bms.celdas, data.ts);
@@ -903,6 +1044,7 @@ function iniciarApp() {
   function refrescarCaptura() {
     const n = Captura.muestras.length;
     $('contMuestras').textContent = n;
+    $('kpiMuestras').textContent = n;
     $('btnExportar').disabled = n === 0;
     $('btnVaciar').disabled = n === 0;
     const lista = $('ultimasMuestras');
@@ -930,6 +1072,32 @@ function iniciarApp() {
   window.addEventListener('beforeunload', (e) => {
     if (Captura.muestras.length) { e.preventDefault(); e.returnValue = ''; }
   });
+
+  /* ---------- vista y orden de la tabla de motores ---------- */
+  $('vistaTabla').addEventListener('click', () => PanelMotores.mostrarVista('tabla'));
+  $('vistaMapa').addEventListener('click', () => PanelMotores.mostrarVista('mapa'));
+  $('thTemp').addEventListener('click', () => PanelMotores.cambiarOrden());
+  $('thTemp').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); PanelMotores.cambiarOrden(); }
+  });
+
+  /* ---------- tema claro / oscuro y pantalla completa ---------- */
+  function aplicarTema(tema) {
+    document.documentElement.dataset.tema = tema;
+    guardarAlmacenado('tp05.tema', tema);
+    PanelIMU.recolorear();
+    PanelTemp.recolorear();
+    PanelCeldas.recolorear();
+  }
+  $('btnTema').addEventListener('click', () => {
+    aplicarTema(document.documentElement.dataset.tema === 'claro' ? 'oscuro' : 'claro');
+  });
+  $('btnPantalla').addEventListener('click', () => {
+    if (!document.fullscreenElement) { if (document.documentElement.requestFullscreen) document.documentElement.requestFullscreen(); }
+    else if (document.exitFullscreen) document.exitFullscreen();
+  });
+  const temaGuardado = leerAlmacenado('tp05.tema');
+  document.documentElement.dataset.tema = (temaGuardado === 'claro' || temaGuardado === 'oscuro') ? temaGuardado : 'oscuro';
 
   /* ---------- selector de motores del gráfico ---------- */
   $('btnTodos').addEventListener('click', () => PanelTemp.marcarTodos(true));
