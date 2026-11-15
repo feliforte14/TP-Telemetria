@@ -162,54 +162,82 @@ Cada muestra es una fila. Las columnas son: `fecha_hora` (UTC), `hora_local`, `t
 
 ## 3. Cómo levantarlo
 
-Hacen falta dos cosas: **el servidor de telemetría** (backend de la cátedra) y **el dashboard** (este repositorio).
+Hacen falta dos cosas, cada una en **su propia terminal**: **el servidor de telemetría** (backend de la cátedra, puerto 8001) y **el dashboard** (este repositorio, puerto 8090). Se levantan por separado y se dejan corriendo las dos.
 
 ### Requisitos
 
-- **Python 3.11 o superior** para el servidor. Con Python 3.10 el WebSocket se corta después del primer mensaje (el servidor captura `TimeoutError` y en 3.10 `asyncio.wait_for` lanza otra clase). El dashboard lo tolera y sigue por polling, pero no recibe datos en modo push.
+- **Python 3.11 o superior** para el servidor. Con Python 3.10 el WebSocket se corta después del primer mensaje (el servidor captura `TimeoutError` y en 3.10 `asyncio.wait_for` lanza otra clase). El dashboard lo tolera y sigue por polling, pero no recibe datos en modo push. Para ver la versión: `python3 --version`.
+- [Visual Studio Code](https://code.visualstudio.com/) (se usa para abrir las dos terminales; también sirve cualquier terminal).
 - Un navegador moderno (probado en Chrome).
 - Conexión a internet: Chart.js se carga desde un CDN. Sin internet el dashboard funciona, pero sin gráficos.
 - Git. Node.js es opcional: solo para correr las pruebas.
 
-### Paso 1. Levantar el servidor de telemetría
+### Paso 0. Abrir el proyecto en Visual Studio Code
 
-El backend es del repositorio de la cátedra, [`tsamaan/UadeRobotLab`](https://github.com/tsamaan/UadeRobotLab). En **modo demo** inventa datos de un robot que camina, sin necesidad del robot ni del simulador.
+1. Abrí **Visual Studio Code**.
+2. **Arrastrá la carpeta `TP-Telemetria` desde el Escritorio** hacia la ventana de Visual Studio Code (o hacia su ícono en el Dock). Si pregunta si confiás en los autores de la carpeta, elegí **Yes, I trust the authors**.
+3. Abrí una terminal: menú **Terminal → New Terminal** (atajo ``Ctrl+` ``). Ya queda ubicada en la carpeta del proyecto.
+4. Para tener la **segunda terminal**, tocá el **`+`** (o el ícono de dividir) arriba a la derecha del panel de terminales. Vas a ver dos terminales en la lista de la derecha; se cambia entre ellas haciendo clic.
+
+### Paso 1. Preparar el servidor (solo la primera vez)
+
+El backend es del repositorio de la cátedra, [`tsamaan/UadeRobotLab`](https://github.com/tsamaan/UadeRobotLab). En **modo demo** inventa datos de un robot que camina, sin necesidad del robot ni del simulador. Estos comandos se corren **una sola vez**, en cualquier terminal.
 
 macOS o Linux:
 
 ```bash
+cd ~
 git clone https://github.com/tsamaan/UadeRobotLab.git
 python3 -m venv ~/tp05-venv
-source ~/tp05-venv/bin/activate
-pip install fastapi uvicorn websockets
-cd UadeRobotLab/05LaboratoriosTPs/TP05_Desarrollo_de_Aplicaciones_II/entorno
-python arrancar_api.py --demo --robot go2
+~/tp05-venv/bin/pip install fastapi uvicorn websockets
 ```
+
+Si `python3 --version` muestra una versión menor a 3.11, usá una más nueva para crear el entorno (por ejemplo `python3.13 -m venv ~/tp05-venv` o `python3.11 -m venv ~/tp05-venv`).
 
 Windows (PowerShell):
 
 ```powershell
+cd $HOME
 git clone https://github.com/tsamaan/UadeRobotLab.git
 py -3.11 -m venv $HOME\tp05-venv
-& $HOME\tp05-venv\Scripts\Activate.ps1
-pip install fastapi uvicorn websockets
-cd UadeRobotLab\05LaboratoriosTPs\TP05_Desarrollo_de_Aplicaciones_II\entorno
-python arrancar_api.py --demo --robot go2
+& $HOME\tp05-venv\Scripts\pip.exe install fastapi uvicorn websockets
 ```
 
-El servidor imprime la dirección a la que hay que pegarle, por ejemplo `http://192.168.0.5:8001`. Para comprobar que anda, abrí `http://localhost:8001/telemetria` en el navegador: tiene que aparecer un JSON.
+### Paso 2. Terminal 1: servidor de telemetría
 
-### Paso 2. Abrir el dashboard
+En la **primera terminal** (macOS o Linux):
 
 ```bash
-git clone https://github.com/feliforte14/TP-Telemetria.git
-cd TP-Telemetria
+cd ~/UadeRobotLab/05LaboratoriosTPs/TP05_Desarrollo_de_Aplicaciones_II/entorno
+~/tp05-venv/bin/python arrancar_api.py --demo --robot go2
+```
+
+En Windows (PowerShell):
+
+```powershell
+cd $HOME\UadeRobotLab\05LaboratoriosTPs\TP05_Desarrollo_de_Aplicaciones_II\entorno
+& $HOME\tp05-venv\Scripts\python.exe arrancar_api.py --demo --robot go2
+```
+
+El servidor imprime la dirección a la que hay que pegarle, por ejemplo `http://192.168.0.5:8001`, y **queda corriendo**: no cierres esta terminal ni escribas nada más en ella. Para comprobar que anda, abrí `http://localhost:8001/telemetria` en el navegador: tiene que aparecer un JSON.
+
+### Paso 3. Terminal 2: dashboard
+
+En la **segunda terminal** (la que abrís con el `+`, ya ubicada en la carpeta `TP-Telemetria`):
+
+```bash
 python3 -m http.server 8090
 ```
 
-Y entrar a **http://localhost:8090/dashboard.html**. También se puede abrir `dashboard.html` con doble clic, sin servidor web.
+Si esa terminal no quedó en la carpeta del proyecto, primero hacé `cd ~/Desktop/TP-Telemetria`.
+
+Después entrá a **http://localhost:8090/dashboard.html**. Arriba a la izquierda tiene que decir «En vivo · WebSocket». También se puede abrir `dashboard.html` con doble clic, sin servidor web.
 
 Si el servidor de telemetría está en la misma máquina, el dashboard lo encuentra solo: prueba `http://localhost:8001` (laboratorio) y `http://localhost:8000` (servidor de ejemplo del enunciado) y usa el que responda. Si el servidor está en otra máquina, escribí su dirección en el campo **Servidor** de la barra superior, o agregá `?api=http://IP:8001` a la dirección de la página.
+
+### Para cerrar todo
+
+Hacé clic en cada terminal y apretá **`Ctrl+C`**. La próxima vez alcanza con repetir los pasos 0, 2 y 3 (el paso 1 es solo la primera vez).
 
 ### Otras fuentes de datos
 
